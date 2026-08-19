@@ -1,156 +1,90 @@
 {% extends 'strava_generator/base.html' %}
 {% load static %}
-{% load compress %}
 
+{% block title %}Strava Generator · GPX route builder{% endblock %}
 
-{% block title %}
-    STRAVA GENERATOR
+{% block css %}
+    <link rel="stylesheet" href="{% static 'strava_generator/css/index.css' %}">
 {% endblock %}
-
-
-{% block css-before %}
-    <link
-            rel="stylesheet"
-            href="https://cdn.jsdelivr.net/npm/zebra_datepicker@latest/dist/css/bootstrap/zebra_datepicker.min.css">
-{% endblock %}
-
-{% block css-after %}
-    {% compress css %}
-        <link rel="stylesheet" href="{% static 'strava_generator/css/index.css' %}">
-    {% endcompress %}
-{% endblock %}
-
 
 {% block content %}
-    <main class="d-flex align-items-start align-content-center justify-content-center flex-shrink-0 flex-grow-1 my-0 my-lg-3">
-        <section class="row p-0 justify-content-center flex-shrink-1 flex-grow-1 py-3 py-sm-2 py-md-3 py-lg-0">
-            <form class="gen-form container px-3">
-                <div class="map-group form-group row justify-content-center rounded-lg">
-                    <div class="col-12 col-lg p-0">
-                        <div id="map" class="rounded"></div>
-                        <div id="marker-menu" class="dropdown-menu user-select-none">
-                            <div class="add-marker dropdown-item"><i class="far fa-plus-square fa-sm"></i>&nbsp; Add
-                                point to the route
-                            </div>
-                            <div class="remove-marker dropdown-item"><i class="fas fa-trash fa-sm"></i>&nbsp; Remove
-                                marker
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-12 col-lg-4 p-0 mt-3 mt-lg-0 ml-lg-2">
-                        <div class="row">
-                            <div class="col-9 col-sm-10 col-md-11 col-lg-10 p-0">
-                                <label for="location-input" class="d-none">Location input</label>
-                                <input id="location-input" type="text" class="form-control"
-                                       placeholder="Search for a location..." autocomplete="off">
-                            </div>
-                            <div class="col p-0 ml-1 mt-sm-0">
-                                <button id="remove-all-markers" type="button" class="btn btn-danger w-100"
-                                        title="Remove all route points">
-                                    <i class="fas fa-trash fa-sm"></i>
-                                </button>
-                            </div>
-                        </div>
-                        <div class="row mt-2">
-                            <div class="location-list-container col p-0">
-                                <div id="no-route-points-info"
-                                     class="d-none d-lg-flex flex-column align-items-center justify-content-center h-100">
-                                    <i class="fas fa-map-marker-alt"></i>
-                                    <p class="mt-1">No route points yet</p>
-                                </div>
-                                <ul id="location-list" class="list-group"></ul>
-                            </div>
-                        </div>
-                    </div>
+<main class="app-shell">
+    <section class="intro">
+        <div>
+            <p class="eyebrow">GPX ROUTE BUILDER</p>
+            <h1>Build the route.<br><span>Own the effort.</span></h1>
+        </div>
+        <p class="intro-copy">Drop points on the map, choose an activity, and export a timestamped GPX file. No account or API key required.</p>
+    </section>
+
+    <section class="builder" aria-label="Route builder">
+        <div class="map-column">
+            <div class="map-toolbar">
+                <form id="search-form" class="search-form" autocomplete="off">
+                    <label class="sr-only" for="location-search">Search for a location</label>
+                    <input id="location-search" type="search" placeholder="Search a city, landmark, or address" maxlength="120">
+                    <button type="submit">Search</button>
+                    <div id="search-results" class="search-results" hidden></div>
+                </form>
+                <button id="clear-route" class="ghost-button" type="button">Clear route</button>
+            </div>
+
+            <div class="map-frame">
+                <div id="map" aria-label="Interactive route map"></div>
+                <div id="route-status" class="route-status is-empty" aria-live="polite">Add two points to begin</div>
+                <div class="map-hint">Click the map to add a point · Drag markers to adjust</div>
+            </div>
+        </div>
+
+        <aside class="control-column">
+            <div class="panel-heading">
+                <div>
+                    <p class="step-label">01 · ROUTE</p>
+                    <h2>Route points</h2>
                 </div>
+                <span id="point-count" class="count-pill">0 / 26</span>
+            </div>
 
-                <div class="row">
+            <ol id="point-list" class="point-list">
+                <li class="empty-points">Your route points will appear here.</li>
+            </ol>
 
-                    <div class="activity-param form-group col-12 col-md text-center rounded-lg">
-                        <label class="" for="activity-type">Activity type</label>
-                        <div class="btn-group btn-group-toggle w-100" id="activity-type" data-toggle="buttons">
-                            <label class="btn btn-outline-secondary shadow-none">
-                                <input type="radio" name="options" value="run" autocomplete="off" checked> Run Activity
-                            </label>
-                            <label class="btn btn-outline-secondary shadow-none">
-                                <input type="radio" name="options" value="bike" autocomplete="off"> Bike Activity
-                            </label>
-                        </div>
-                    </div>
+            <div class="settings-block">
+                <p class="step-label">02 · ACTIVITY</p>
+                <fieldset class="activity-options">
+                    <legend class="sr-only">Activity type</legend>
+                    <label>
+                        <input type="radio" name="activity" value="run" checked>
+                        <span><strong>Run</strong><small>3–8 min/km pace</small></span>
+                    </label>
+                    <label>
+                        <input type="radio" name="activity" value="bike">
+                        <span><strong>Bike</strong><small>2–5 min/km pace</small></span>
+                    </label>
+                </fieldset>
+            </div>
 
-                    <!-- =========================================================================================== -->
-
-                    <div class="activity-param form-group col-12 col-md ml-md-3 text-center rounded-lg">
-                        <label class="" for="datetime-picker">Finish time</label>
-                        <div class="input-group">
-                            <div class="col-8 p-0">
-                                <input id="datetime-picker" type="text" class="form-control">
-                            </div>
-
-                            <div class="input-group-append col p-0" title="Use now time for the end of activity">
-                                <div class="now-time-group input-group-text w-100 justify-content-center">
-                                    <div class="custom-control custom-checkbox">
-                                        <input id="now-time-checkbox" type="checkbox" class="custom-control-input"
-                                               checked>
-                                        <label class="custom-control-label user-select-none"
-                                               for="now-time-checkbox">Now</label>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
+            <div class="settings-block">
+                <p class="step-label">03 · FINISH TIME</p>
+                <div class="time-control">
+                    <label class="sr-only" for="finish-time">Finish time</label>
+                    <input id="finish-time" type="datetime-local" step="1">
+                    <button id="set-now" type="button">Now</button>
                 </div>
+            </div>
 
-                <!-- =============================================================================================== -->
+            <button id="generate-gpx" class="generate-button" type="button" disabled>
+                <span>Generate GPX</span><span aria-hidden="true">↓</span>
+            </button>
 
-                <div class="row justify-content-center mt-3 text-center">
-                    <button id="generate-gpx-button" type="button" class="btn btn-primary w-100" disabled>Generate .gpx
-                        file
-                    </button>
-                </div>
+            <p class="use-note">For personal route simulation and testing. Respect Strava’s rules and only upload activity data that accurately represents your effort.</p>
+        </aside>
+    </section>
+</main>
 
-                <!-- =============================================================================================== -->
-
-                <div id="error-modal" class="modal fade">
-                    <div class="modal-dialog modal-dialog-centered justify-content-center">
-                        <div class="modal-content">
-                            <div class="modal-header flex-column align-items-center">
-                                <div class="icon-box">
-                                    <i class="far fa-times-circle"></i>
-                                </div>
-                                <h3 class="modal-title w-100 mt-2">Error</h3>
-                                <button type="button" class="close" data-dismiss="modal" aria-hidden="true">&times;
-                                </button>
-                            </div>
-                            <div class="modal-body px-3 py-2">
-                                <p id="error-modal-message" class="mb-1"></p>
-                            </div>
-                            <div class="modal-footer justify-content-center">
-                                <button type="button" class="btn btn-secondary font-weight-bold" data-dismiss="modal">
-                                    OK
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </form>
-        </section>
-    </main>
+<div id="toast" class="toast" role="alert" aria-live="assertive" hidden></div>
 {% endblock %}
 
-
 {% block js %}
-    <script src="https://cdn.jsdelivr.net/npm/zebra_datepicker@latest/dist/zebra_datepicker.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.0/FileSaver.min.js"></script>
-
-    {% compress js %}
-        <script src="{% static 'strava_generator/js/index_load.js' %}"></script>
-        <script src="{% static 'strava_generator/js/index.js' %}"></script>
-    {% endcompress %}
-
-    <script
-            async defer
-            src="https://maps.googleapis.com/maps/api/js?key=AIzaSyC5SJfVsTxaGkDbE7Wl9hoW8LuqHo-j_4Q&callback=initMap&language=en&libraries=places"
-    ></script>
+    <script src="{% static 'strava_generator/js/index.js' %}" defer></script>
 {% endblock %}

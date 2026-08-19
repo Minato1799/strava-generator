@@ -1,366 +1,325 @@
-function addMarker(coords, name) {
-    const marker = new google.maps.Marker({
-        position: coords,
-        map: map,
-        draggable: true,
-        title: name,
+const MAX_POINTS = 26;
+const DEFAULT_CENTER = [13.7563, 100.5018];
+const ACTIVITY_MINIMUMS = { run: 3000, bike: 5000 };
+
+const state = {
+    map: null,
+    markers: [],
+    routeLayer: null,
+    routeReady: false,
+    routeController: null,
+    updateTimer: null,
+};
+
+const elements = {
+    searchForm: document.querySelector('#search-form'),
+    searchInput: document.querySelector('#location-search'),
+    searchResults: document.querySelector('#search-results'),
+    clearRoute: document.querySelector('#clear-route'),
+    routeStatus: document.querySelector('#route-status'),
+    pointList: document.querySelector('#point-list'),
+    pointCount: document.querySelector('#point-count'),
+    finishTime: document.querySelector('#finish-time'),
+    setNow: document.querySelector('#set-now'),
+    generate: document.querySelector('#generate-gpx'),
+    toast: document.querySelector('#toast'),
+};
+
+function initialise() {
+    state.map = L.map('map', { zoomControl: true }).setView(DEFAULT_CENTER, 12);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    }).addTo(state.map);
+
+    state.map.on('click', (event) => {
+        const { lat, lng } = event.latlng;
+        addPoint(lat, lng, `Pinned point ${state.markers.length + 1}`);
     });
 
-    let $routePoint;
-
-    google.maps.event.addListener(marker, 'rightclick', (e) => {
-        if (e.domEvent instanceof MouseEvent || e.domEvent instanceof TouchEvent) {
-            const clickEvent = e.domEvent;
-
-            let clientX, clientY;
-            switch (true) {
-                case clickEvent instanceof MouseEvent:
-                    clientX = clickEvent.clientX;
-                    clientY = clickEvent.clientY;
-                    break;
-
-                case clickEvent instanceof TouchEvent:
-                    clientX = clickEvent.changedTouches[0].clientX;
-                    clientY = clickEvent.changedTouches[0].clientY;
-                    break;
-            }
-
-            const left = clientX;
-            const top = clientY;
-
-            $markerMenu.css('left', `${left}px`);
-            $markerMenu.css('top', `${top}px`);
-            $markerMenu.css('display', 'block');
-
-            $markerMenu.find('.add-marker')
-                .off('click')
-                .click(() => {
-                    $routePoint = addRoutePoint(marker);
-                });
-
-            $markerMenu.find('.remove-marker')
-                .off('click')
-                .click(() => {
-                    marker.setMap(null);
-                    removeRoutePoint($routePoint);
-                });
-
-            clickEvent.preventDefault();
-        }
+    elements.searchForm.addEventListener('submit', searchLocations);
+    elements.clearRoute.addEventListener('click', clearRoute);
+    elements.setNow.addEventListener('click', setFinishTimeToNow);
+    elements.generate.addEventListener('click', generateGpx);
+    document.querySelectorAll('input[name="activity"]').forEach((input) => {
+        input.addEventListener('change', scheduleRouteUpdate);
+    });
+    document.addEventListener('click', (event) => {
+        if (!elements.searchForm.contains(event.target)) elements.searchResults.hidden = true;
     });
 
-    google.maps.event.addListener(marker, 'click', (e) => {
-        if (e.domEvent instanceof TouchEvent) {
-            google.maps.event.trigger(marker, 'rightclick', e);
-        }
-    });
+    setFinishTimeToNow();
+    renderPointList();
 
-    google.maps.event.addListener(marker, 'dragstart', () => {
-        $markerMenu.css('display', 'none');
-    });
-
-    map.setCenter(coords);
-}
-
-function removeRoutePoint($routePoint) {
-    if (!$routePoint) {
-        return;
-    }
-
-    const marker = $routePoint.data('marker');
-    const coordsString = getCoordsString(marker);
-
-    marker.setMap(null);
-    delete routeMarkers[coordsString];
-    $routePoint.remove();
-
-    drawRoute();
-}
-
-
-function drawRoute() {
-    setMarkersLabels();
-    const $locationListChildren = $locationList.children('.list-group-item');
-
-    if ($locationListChildren.length === 0) {
-        showNoRoutePointsInfo();
-        turnWarning(
-            $statusBarInfo,
-            '0 km', activity_limit[getCheckedActivity()].warn,
-            'totalDistance', 0
+    if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+            ({ coords }) => {
+                if (!state.markers.length) state.map.setView([coords.latitude, coords.longitude], 14);
+            },
+            () => {},
+            { timeout: 5000 }
         );
+    }
+}
+
+function activityType() {
+    return document.querySelector('input[name="activity"]:checked').value;
+}
+
+function pointString() {
+    return state.markers
+        .map(({ marker }) => {
+            const point = marker.getLatLng();
+            return `${point.lat.toFixed(7)},${point.lng.toFixed(7)}`;
+        })
+        .join('|');
+}
+
+function addPoint(latitude, longitude, name) {
+    if (state.markers.length >= MAX_POINTS) {
+        showError(`A route can contain at most ${MAX_POINTS} points.`);
         return;
     }
 
-    hideNoRoutePointsInfo();
+    const marker = L.marker([latitude, longitude], { draggable: true }).addTo(state.map);
+    marker.on('dragend', scheduleRouteUpdate);
+    state.markers.push({ marker, name });
+    renderPointList();
+    scheduleRouteUpdate();
+}
 
-    let coordsArr = [];
-    $locationListChildren.each(function () {
-        coordsArr.push(getCoordsString($(this).data('marker')));
+function removePoint(index) {
+    const [removed] = state.markers.splice(index, 1);
+    if (removed) state.map.removeLayer(removed.marker);
+    renderPointList();
+    scheduleRouteUpdate();
+}
+
+function movePoint(index, direction) {
+    const destination = index + direction;
+    if (destination < 0 || destination >= state.markers.length) return;
+    [state.markers[index], state.markers[destination]] = [state.markers[destination], state.markers[index]];
+    renderPointList();
+    scheduleRouteUpdate();
+}
+
+function renderPointList() {
+    elements.pointCount.textContent = `${state.markers.length} / ${MAX_POINTS}`;
+    elements.pointList.innerHTML = '';
+
+    if (!state.markers.length) {
+        const empty = document.createElement('li');
+        empty.className = 'empty-points';
+        empty.textContent = 'Your route points will appear here.';
+        elements.pointList.append(empty);
+        return;
+    }
+
+    state.markers.forEach((item, index) => {
+        item.marker.unbindTooltip();
+        item.marker.bindTooltip(String.fromCharCode(65 + index), {
+            permanent: true,
+            direction: 'center',
+            className: 'marker-label',
+        });
+
+        const coordinates = item.marker.getLatLng();
+        const row = document.createElement('li');
+        row.className = 'point-item';
+        row.innerHTML = `
+            <span class="point-letter">${String.fromCharCode(65 + index)}</span>
+            <span class="point-copy">
+                <strong title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</strong>
+                <small>${coordinates.lat.toFixed(5)}, ${coordinates.lng.toFixed(5)}</small>
+            </span>
+            <span class="point-actions">
+                <button type="button" data-action="up" aria-label="Move point up">↑</button>
+                <button type="button" data-action="down" aria-label="Move point down">↓</button>
+                <button type="button" data-action="remove" aria-label="Remove point">×</button>
+            </span>`;
+        row.querySelector('[data-action="up"]').addEventListener('click', () => movePoint(index, -1));
+        row.querySelector('[data-action="down"]').addEventListener('click', () => movePoint(index, 1));
+        row.querySelector('[data-action="remove"]').addEventListener('click', () => removePoint(index));
+        row.querySelector('.point-copy').addEventListener('click', () => state.map.panTo(item.marker.getLatLng()));
+        elements.pointList.append(row);
     });
+}
 
-    const origin = coordsArr[0];
-    const destination = coordsArr[coordsArr.length - 1];
+function scheduleRouteUpdate() {
+    window.clearTimeout(state.updateTimer);
+    state.updateTimer = window.setTimeout(updateRoute, 350);
+}
 
-    let waypoints = [];
-    if ($locationListChildren.length > 2) {
-        const waypointsArr = coordsArr.splice(1, coordsArr.length - 2);
-        waypointsArr.forEach((coords) => {
-            waypoints.push({
-                location: coords,
-                stopover: true
+async function updateRoute() {
+    state.routeReady = false;
+    elements.generate.disabled = true;
+
+    if (state.routeController) state.routeController.abort();
+    if (state.routeLayer) {
+        state.map.removeLayer(state.routeLayer);
+        state.routeLayer = null;
+    }
+
+    if (state.markers.length < 2) {
+        setRouteStatus('Add two points to begin', 'is-empty');
+        return;
+    }
+
+    state.routeController = new AbortController();
+    setRouteStatus('Building route…', 'is-loading');
+
+    const params = new URLSearchParams({ points: pointString(), activity_type: activityType() });
+    try {
+        const response = await fetch(`/api/v1/route?${params}`, { signal: state.routeController.signal });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || 'Route could not be built');
+
+        state.routeLayer = L.polyline(payload.route, {
+            color: '#fc4c02', weight: 5, opacity: .92, lineJoin: 'round',
+        }).addTo(state.map);
+        state.map.fitBounds(state.routeLayer.getBounds(), { padding: [45, 45], maxZoom: 16 });
+
+        const distance = payload.distance;
+        const minimum = ACTIVITY_MINIMUMS[activityType()];
+        const statusClass = distance < minimum ? 'is-warning' : 'is-ready';
+        const suffix = distance < minimum ? ` · suggested minimum ${(minimum / 1000).toFixed(0)} km` : '';
+        setRouteStatus(`${(distance / 1000).toFixed(2)} km${suffix}`, statusClass);
+        state.routeReady = true;
+        elements.generate.disabled = false;
+    } catch (error) {
+        if (error.name === 'AbortError') return;
+        setRouteStatus(error.message, 'is-error');
+        showError(error.message);
+    }
+}
+
+async function searchLocations(event) {
+    event.preventDefault();
+    const query = elements.searchInput.value.trim();
+    if (query.length < 2) {
+        showError('Enter at least two characters to search.');
+        return;
+    }
+
+    const submit = elements.searchForm.querySelector('button[type="submit"]');
+    submit.disabled = true;
+    submit.textContent = 'Searching…';
+    try {
+        const response = await fetch(`/api/v1/search-location?q=${encodeURIComponent(query)}`);
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || 'Location search failed');
+        renderSearchResults(payload.results);
+    } catch (error) {
+        showError(error.message);
+    } finally {
+        submit.disabled = false;
+        submit.textContent = 'Search';
+    }
+}
+
+function renderSearchResults(results) {
+    elements.searchResults.innerHTML = '';
+    if (!results.length) {
+        const empty = document.createElement('div');
+        empty.className = 'search-result';
+        empty.textContent = 'No locations found.';
+        elements.searchResults.append(empty);
+    } else {
+        results.forEach((result) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'search-result';
+            button.textContent = result.name;
+            button.addEventListener('click', () => {
+                addPoint(result.lat, result.lon, result.name);
+                state.map.setView([result.lat, result.lon], 15);
+                elements.searchResults.hidden = true;
+                elements.searchInput.value = '';
             });
+            elements.searchResults.append(button);
         });
     }
-
-    turnSpinner($statusBarInfo);
-    $generateGpxButton.prop('disabled', true);
-
-    directionService.route(
-        {
-            origin: origin,
-            destination: destination,
-            waypoints: waypoints,
-            travelMode: google.maps.TravelMode.WALKING
-        },
-        (response, status) => {
-            if (status === 'OK' && response) {
-                processLegs(response.routes[0].legs);
-                if ($locationListChildren.length < 2) {
-                    clearRouteRenderer();
-                    turnWarning(
-                        $statusBarInfo,
-                        '0 km', activity_limit[getCheckedActivity()].warn,
-                        'totalDistance', 0
-                    );
-                } else {
-                    directionsRenderer.setDirections(response);
-                    $generateGpxButton.prop('disabled', false);
-                }
-            } else {
-                clearRouteRenderer();
-                turnDanger(
-                    $statusBarInfo,
-                    'N/A', `Route cannot be built with this set of markers`,
-                    'totalDistance', 0
-                );
-            }
-        }
-    );
+    elements.searchResults.hidden = false;
 }
 
-$noRoutePointsInfo = $('#no-route-points-info');
-function hideNoRoutePointsInfo() {
-    $noRoutePointsInfo.removeClass('d-lg-flex');
+function clearRoute() {
+    state.markers.forEach(({ marker }) => state.map.removeLayer(marker));
+    state.markers = [];
+    if (state.routeLayer) state.map.removeLayer(state.routeLayer);
+    state.routeLayer = null;
+    state.routeReady = false;
+    elements.generate.disabled = true;
+    renderPointList();
+    setRouteStatus('Add two points to begin', 'is-empty');
 }
 
-function showNoRoutePointsInfo() {
-    $noRoutePointsInfo.addClass('d-lg-flex');
-}
+async function generateGpx() {
+    if (!state.routeReady) return;
+    const finishDate = new Date(elements.finishTime.value);
+    if (Number.isNaN(finishDate.getTime())) {
+        showError('Choose a valid finish time.');
+        return;
+    }
 
-function processLegs(legs) {
-    let totalDistance = 0;
-    const $locationListChildren = $locationList.children('.list-group-item');
-    $locationListChildren.each(function (i) {
-        const marker = $(this).data('marker');
-
-        let addressHtml;
-        if (i < legs.length) {
-            addressHtml = `${legs[i].start_address}`
-            setTextInfo(
-                $(this).find('.location-name'),
-                `&nbsp; ${addressHtml}`,
-                addressHtml
-            );
-
-            marker.setTitle(legs[i].start_address);
-            marker.setPosition(new google.maps.LatLng(
-                legs[i].start_location.lat(),
-                legs[i].start_location.lng()
-            ));
-            totalDistance += legs[i].distance.value;
-        } else {
-            addressHtml = `${legs[i - 1].end_address}`;
-            setTextInfo(
-                $(this).find('.location-name'),
-                `&nbsp; ${addressHtml}`,
-                addressHtml
-            );
-
-            marker.setTitle(legs[i - 1].end_address);
-            marker.setPosition(new google.maps.LatLng(
-                legs[i - 1].end_location.lat(),
-                legs[i - 1].end_location.lng()
-            ));
-        }
+    elements.generate.disabled = true;
+    const original = elements.generate.innerHTML;
+    elements.generate.innerHTML = '<span>Generating…</span><span>•••</span>';
+    const params = new URLSearchParams({
+        points: pointString(),
+        activity_type: activityType(),
+        end_time: finishDate.toISOString(),
     });
 
-
-    const totalDistanceString = `${Number(totalDistance / 1000).toFixed(2)} km`;
-    const checkedActivity = getCheckedActivity();
-    if (totalDistance < activity_limit[checkedActivity].val) {
-        turnWarning(
-            $statusBarInfo,
-            totalDistanceString, activity_limit[checkedActivity].warn,
-            'totalDistance', totalDistance
-        );
-    } else {
-        turnSuccess(
-            $statusBarInfo,
-            totalDistanceString, '',
-            'totalDistance', totalDistance
-        );
+    try {
+        const response = await fetch(`/api/v1/generate-strava-gpx?${params}`);
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || 'GPX generation failed');
+        downloadText(payload.gpx, `strava_${fileTimestamp(new Date())}.gpx`);
+    } catch (error) {
+        showError(error.message);
+    } finally {
+        elements.generate.innerHTML = original;
+        elements.generate.disabled = !state.routeReady;
     }
 }
 
-function addRoutePoint(marker) {
-    if ($locationList.length === MAX_ROUTE_POINTS_NUM) {
-        return null;
-    }
-
-    const $locationListChildren = $locationList.children('.list-group-item');
-
-    if (marker.label) {
-        let $existedRoutePoint = null;
-        $locationListChildren.each(function () {
-            if ($(this).data('marker') === marker) {
-                $existedRoutePoint = $(this);
-            }
-        });
-        return $existedRoutePoint;
-    }
-
-    const coordsString = getCoordsString(marker);
-    if (!routeMarkers[coordsString]) {
-        routeMarkers[coordsString] = marker;
-    } else {
-        return routeMarkers[coordsString];
-    }
-
-    const name = marker.title;
-    const $routePoint = getRoutePoint(name);
-    $routePoint.data('marker', marker);
-    $routePoint.click(() => {
-        map.setCenter(getCoordsObject(marker));
-        map.setZoom(DEFAULT_MAP_ZOOM);
-    });
-
-    $locationList.append($routePoint);
-
-    google.maps.event.addListener(marker, 'dragend', drawRoute);
-    drawRoute();
-
-    return $routePoint;
+function setFinishTimeToNow() {
+    const now = new Date();
+    const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+    elements.finishTime.value = local.toISOString().slice(0, 19);
 }
 
-function getRoutePoint(name) {
-    const $routePoint = $('<li/>', {
-        class: 'list-group-item d-flex align-items-center'
-    }).append(
-        $('<i/>', {
-            class: 'drag-item fas fa-bars fa-sm mr-2',
-            'aria-hidden': 'true',
-        })
-    ).append(
-        $('<span/>', {
-            class: 'circle',
-        }).append(
-            $('<strong/>', {
-                class: 'location-label alph user-select-none'
-            })
-        )
-    ).append(
-        $('<p/>', {
-            class: 'location-name m-0 mr-3 user-select-none text-truncate',
-            title: name,
-            html: `&nbsp; ${name}`,
-        })
-    ).append(
-        $('<i/>', {
-            class: 'remove-item fas fa-trash fa-sm ml-auto',
-            'aria-hidden': 'true',
-        })
-    );
-
-    $routePoint.find('.remove-item').click(() => removeRoutePoint($routePoint));
-    return $routePoint;
+function setRouteStatus(message, className) {
+    elements.routeStatus.textContent = message;
+    elements.routeStatus.className = `route-status ${className}`;
 }
 
-function setMarkersLabels() {
-    const $locationListChildren = $locationList.children('.list-group-item');
-    $locationListChildren.each(function (i) {
-        const marker = $(this).data('marker');
-
-        const label = {
-            color: 'white',
-            fontWeight: 'bold',
-            text: LABELS[i]
-        };
-
-        $(this).find('.location-label').text(label.text);
-        marker.setLabel(label);
-    });
+function showError(message) {
+    elements.toast.textContent = message;
+    elements.toast.hidden = false;
+    window.clearTimeout(elements.toast.hideTimer);
+    elements.toast.hideTimer = window.setTimeout(() => { elements.toast.hidden = true; }, 5000);
 }
 
-function getCoordsString(marker) {
-    return `${marker.position.lat()},${marker.position.lng()}`
+function downloadText(text, filename) {
+    const url = URL.createObjectURL(new Blob([text], { type: 'application/gpx+xml;charset=utf-8' }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
 }
 
-function getCoordsObject(marker) {
-    return new google.maps.LatLng(
-        marker.position.lat(),
-        marker.position.lng()
-    );
+function fileTimestamp(date) {
+    return date.toISOString().replace(/[-:]/g, '').replace(/\..+/, '').replace('T', '_');
 }
 
-function clearRouteRenderer() {
-    directionsRenderer.setDirections({routes: []});
+function escapeHtml(value) {
+    const element = document.createElement('div');
+    element.textContent = value;
+    return element.innerHTML;
 }
 
-function turnSuccess($el, text, title, dataKey, dataValue) {
-    $el.removeClass('badge-warning badge-danger badge-info');
-    $el.addClass('badge-success');
-    setData($el, dataKey, dataValue);
-    setTextInfo($el, text, title);
-}
-
-function turnWarning($el, text, title, dataKey, dataValue) {
-    $el.removeClass('badge-success badge-danger badge-info');
-    $el.addClass('badge-warning');
-    setData($el, dataKey, dataValue);
-    setTextInfo($el, text, title);
-}
-
-function turnDanger($el, text, title, dataKey, dataValue) {
-    $el.removeClass('badge-success badge-warning badge-info');
-    $el.addClass('badge-danger');
-    setData($el, dataKey, dataValue);
-    setTextInfo($el, text, title);
-}
-
-function turnSpinner($el) {
-    $el.removeClass('badge-success badge-warning badge-danger');
-    $el.addClass('badge-info');
-    setData($el, null, null);
-    setTextInfo($el, getStatusBarSpinner(), 'Loading...');
-}
-
-function setTextInfo($el, text, title) {
-    if (text !== null) {
-        $el.html(text);
-    }
-
-    if (title !== null) {
-        $el.prop('title', title);
-    }
-}
-
-function setData($el, dataKey, dataValue) {
-    if (dataKey !== null) {
-        $el.data(dataKey, dataValue);
-    }
-}
-
-function getStatusBarSpinner() {
-    return '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
-}
+window.addEventListener('DOMContentLoaded', initialise);

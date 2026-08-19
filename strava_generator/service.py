@@ -1,357 +1,160 @@
+"""Stateless routing and geocoding helpers used by the public API."""
+
 import logging
-import googlemaps
-import polyline
+from datetime import datetime, timezone
 
-from datetime import datetime
+import requests
 
-from django.contrib.auth import logout
-from django.db import transaction
-from django.shortcuts import render, redirect
-from django.utils.datastructures import MultiValueDictKeyError
-from django.core.exceptions import ValidationError
-from rest_framework.exceptions import PermissionDenied
-
-from strava.settings import GMAPS_API_TOKEN
 from mylibs.gpxgen import GpxGen
-from .models import (
-    Visit,
-    Visitor,
-    CustomUser,
-    UsageToken,
-    Action,
-    GpxGenerationHistory,
-)
 
 
-logger = logging.getLogger('django')
+logger = logging.getLogger("strava_generator")
+
+MAX_ROUTE_POINTS = 26
+MAX_TOTAL_DISTANCE_METERS = 50_000
+ROUTING_BASE_URL = "https://router.project-osrm.org/route/v1"
+SEARCH_URL = "https://nominatim.openstreetmap.org/search"
+REQUEST_HEADERS = {
+    "User-Agent": "StravaGeneratorVercel/1.0 (+https://github.com/iamdubrovskii/strava-generator)"
+}
 
 
-# constants
-MAX_TOTAL_DISTANCE = 50000
+class RequestValidationError(ValueError):
+    pass
 
 
-class TooLongDistanceException(Exception):
-    def __init__(self, msg):
-        super(TooLongDistanceException, self).__init__(msg)
+class ExternalServiceError(RuntimeError):
+    pass
 
 
-class IncorrectCoordinatesFormatException(Exception):
-    def __init__(self, msg):
-        super(IncorrectCoordinatesFormatException, self).__init__(msg)
+def parse_points(raw_points):
+    if not raw_points:
+        raise RequestValidationError("Add at least two route points")
 
+    point_strings = raw_points.split("|")
+    if len(point_strings) < 2:
+        raise RequestValidationError("Add at least two route points")
+    if len(point_strings) > MAX_ROUTE_POINTS:
+        raise RequestValidationError(f"A route can contain at most {MAX_ROUTE_POINTS} points")
 
-class IncorrectActivityTypeException(Exception):
-    def __init__(self, msg):
-        super(IncorrectActivityTypeException, self).__init__(msg)
-
-
-def get_client_ip(request):
-    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-    if x_forwarded_for:
-        ip = x_forwarded_for.split(',')[0]
-    else:
-        ip = request.META.get('REMOTE_ADDR')
-    return ip
-
-
-def get_required(params, key):
-    try:
-        return params[key]
-    except MultiValueDictKeyError:
-        raise ValueError(f'Parameter {key} is required')
-
-
-def get_coordinates(string_coords):
-    string_coords = string_coords.strip()
-
-    if not string_coords:
-        return []
-
-    coords = string_coords.split(',')
-
-    try:
-        coords = [float(coords[0]), float(coords[1])]
-    except (IndexError, ValueError):
-        raise IncorrectCoordinatesFormatException(f'Incorrect coordinates format: {string_coords}')
-
-    return coords
-
-
-def get_coordinates_list(string_coords_list):
-    string_coords_list = string_coords_list.strip()
-
-    if not string_coords_list:
-        return []
-
-    coords_list = string_coords_list.split('|')
-    for i in range(len(coords_list)):
-        try:
-            coords_list[i] = get_coordinates(coords_list[i])
-        except IncorrectCoordinatesFormatException:
-            raise IncorrectCoordinatesFormatException(f'Incorrect coordinates format: {string_coords_list}')
-
-    return coords_list
-
-
-def get_string_from_datetime(datetime_obj):
-    if not datetime_obj:
-        return None
-    return datetime_obj.strftime('%Y-%m-%d %H:%M:%S')
-
-
-def get_datetime_from_string(string_datetime):
-    string_datetime = string_datetime.strip()
-
-    if not string_datetime:
-        return None
-
-    try:
-        return datetime.strptime(string_datetime, '%Y-%m-%dT%H:%M:%S')
-    except ValueError:
-        raise ValueError(f'Incorrect time format: {string_datetime}')
-
-
-def get_cooked_gpx_generator(origin, destination, waypoints, activity_type, end_time):
-    gmaps = googlemaps.Client(key=GMAPS_API_TOKEN)
-
-    try:
-        directions_result = gmaps.directions(
-            origin=origin,
-            waypoints=waypoints,
-            destination=destination,
-            mode='walking'
-        )[0]
-    except Exception as e:
-        logger.exception(e)
-        raise Exception('Impossible route')
-
-    all_points_coords = []
-    total_distance = 0
-    for leg in directions_result['legs']:
-        total_distance += leg['distance']['value']
-        for step in leg['steps']:
-            all_points_coords += polyline.decode(step['polyline']['points'])
-
-    if total_distance > MAX_TOTAL_DISTANCE:
-        raise TooLongDistanceException(f'Distance cannot be more than {round(MAX_TOTAL_DISTANCE / 1000, 2)} km, '
-                                       f'current distance: {round(total_distance / 1000, 2)} km')
-
-    generator = GpxGen(activity_type=activity_type, end_time=end_time)
     points = []
-    for coords in all_points_coords:
-        points.append(coords)
-    generator.add_points(points)
+    for raw_point in point_strings:
+        try:
+            latitude, longitude = (float(value.strip()) for value in raw_point.split(",", 1))
+        except (TypeError, ValueError):
+            raise RequestValidationError(f"Invalid route point: {raw_point}") from None
 
-    from_location = directions_result['legs'][0]['start_address']
-    to_location = directions_result['legs'][-1]['end_address']
+        if not -90 <= latitude <= 90 or not -180 <= longitude <= 180:
+            raise RequestValidationError(f"Route point is outside valid map bounds: {raw_point}")
+        points.append((latitude, longitude))
 
-    return {
-        'generator': generator,
-        'distance': total_distance,
-        'from_location': from_location,
-        'to_location': to_location,
-    }
+    return points
 
 
 def validate_activity_type(activity_type):
-    activity_type = activity_type.strip().lower()
-
-    if not activity_type:
-        activity_type = 'run'
-
-    if activity_type not in ['run', 'bike']:
-        raise IncorrectActivityTypeException(f'Incorrect activity type: {activity_type}')
+    activity_type = (activity_type or "run").strip().lower()
+    if activity_type not in {"run", "bike"}:
+        raise RequestValidationError("Activity type must be run or bike")
     return activity_type
 
 
-def validate_username(username):
-    if not username:
-        raise ValidationError('Username is not provided')
-
-    if len(username) < 6:
-        raise ValidationError('Username length must be at least 6 characters')
-
-    if len(username) > 128:
-        raise ValidationError('Username length cannot be more than 128 characters')
-
-    user_exists = CustomUser.objects.filter(username=username).exists()
-    if user_exists:
-        raise ValidationError(f'User with username \'{username}\' already exists')
+def parse_end_time(raw_end_time):
+    if not raw_end_time:
+        return datetime.now(timezone.utc)
 
     try:
-        CustomUser.username_validator(username)
-    except ValidationError as ve:
-        raise ValidationError(ve.args[0].rstrip('.'))
+        parsed = datetime.fromisoformat(raw_end_time.replace("Z", "+00:00"))
+    except ValueError:
+        raise RequestValidationError("Finish time must be a valid ISO date and time") from None
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    else:
+        parsed = parsed.astimezone(timezone.utc)
+
+    if parsed.timestamp() > datetime.now(timezone.utc).timestamp() + 60:
+        raise RequestValidationError("Finish time cannot be in the future")
+    return parsed
 
 
-def validate_password(password):
-    if not password:
-        raise ValidationError('Password is not provided')
-
-    if len(password) < 6:
-        raise ValidationError('Password length must be at least 6 characters')
-
-    if len(password) > 128:
-        raise ValidationError('Password length cannot be more than 128 characters')
-
-
-def validate_password_confirm(password_confirm, password):
-    if not password_confirm:
-        raise ValidationError('Confirm password is not provided')
-
-    if password_confirm != password:
-        raise ValidationError('Confirm password doesn\'t match with password')
-
-
-def validate_usage_token(usage_token):
-    if not usage_token:
-        raise ValidationError('Usage token is not provided')
+def get_route(points, activity_type):
+    activity_type = validate_activity_type(activity_type)
+    profile = "foot" if activity_type == "run" else "bike"
+    coordinates = ";".join(f"{longitude:.7f},{latitude:.7f}" for latitude, longitude in points)
+    url = f"{ROUTING_BASE_URL}/{profile}/{coordinates}"
 
     try:
-        usage_token = UsageToken.objects.get(value=usage_token)
-    except UsageToken.DoesNotExist:
-        raise ValidationError('Usage token doesn\'t exist')
+        response = requests.get(
+            url,
+            params={"overview": "full", "geometries": "geojson", "steps": "false"},
+            headers=REQUEST_HEADERS,
+            timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError) as error:
+        logger.warning("Routing provider request failed: %s", error)
+        raise ExternalServiceError("The routing service is temporarily unavailable") from error
 
-    if usage_token.status == UsageToken.UsageTokenStatus.INUSE:
-        raise ValidationError('Usage token is already in use now')
-    elif usage_token.status == UsageToken.UsageTokenStatus.INACTIVE:
-        raise ValidationError('Usage token is inactive')
+    routes = payload.get("routes") or []
+    if payload.get("code") != "Ok" or not routes:
+        raise RequestValidationError("A route could not be built for these points")
 
+    route = routes[0]
+    distance = float(route.get("distance", 0))
+    if distance > MAX_TOTAL_DISTANCE_METERS:
+        raise RequestValidationError(
+            f"Route distance cannot exceed {MAX_TOTAL_DISTANCE_METERS / 1000:.0f} km"
+        )
 
-def user_active_status_required(_func=None, *, isApi=False):
-    def decorator(func):
-        def wrapper(request, *args, **kwargs):
-            user = request.user
-            if user is not None:
-                if user.status != CustomUser.CustomUserStatus.ACTIVE:
-                    if isApi:
-                        raise PermissionDenied(detail='Your account doesn\'t have permission to use this service')
-                    else:
-                        logout(request)
-                        request.session['signin_info'] = {
-                            'error_info': 'Your account doesn\'t have permission to use this service',
-                        }
+    geometry = route.get("geometry", {}).get("coordinates") or []
+    if len(geometry) < 2:
+        raise ExternalServiceError("The routing service returned an incomplete route")
 
-                    return redirect('/signin')
-            return func(request, *args, **kwargs)
-        return wrapper
-
-    if _func is None:
-        return decorator
-    else:
-        return decorator(_func)
-
-
-def handle_signin_info(func):
-    def wrapper(request, *args, **kwargs):
-        signin_info = request.session.pop('signin_info', None)
-        if signin_info is not None:
-            if signin_info.get('error_info') is not None:
-                return render(request, 'strava_generator/registration/signin.html',
-                              {'error_info': signin_info['error_info']})
-        return func(request, *args, **kwargs)
-    return wrapper
+    route_points = [(float(latitude), float(longitude)) for longitude, latitude in geometry]
+    return {
+        "points": route_points,
+        "distance": distance,
+        "duration": float(route.get("duration", 0)),
+    }
 
 
-def active_usage_token_required(_func=None, *, isApi=False):
-    def decorator(func):
-        def wrapper(request, *args, **kwargs):
-            user = request.user
-            if user is not None:
-                active_usage_token = user.active_usage_token
-                if not active_usage_token or active_usage_token.status == UsageToken.UsageTokenStatus.INACTIVE:
-                    if isApi:
-                        raise PermissionDenied(detail='Your usage token has expired. Provide new one')
-                    else:
-                        return redirect('/update-usage-token')
-            return func(request, *args, **kwargs)
-        return wrapper
+def search_locations(query):
+    query = (query or "").strip()
+    if len(query) < 2:
+        raise RequestValidationError("Enter at least two characters to search")
+    if len(query) > 120:
+        raise RequestValidationError("Search text is too long")
 
-    if _func is None:
-        return decorator
-    else:
-        return decorator(_func)
+    try:
+        response = requests.get(
+            SEARCH_URL,
+            params={"q": query, "format": "jsonv2", "limit": 5},
+            headers=REQUEST_HEADERS,
+            timeout=10,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError) as error:
+        logger.warning("Geocoding provider request failed: %s", error)
+        raise ExternalServiceError("Location search is temporarily unavailable") from error
 
-
-@transaction.atomic
-def register_user(username, password, usage_token):
-    usage_token = UsageToken.objects.get(value=usage_token)
-    user = CustomUser.objects.create_user(
-        username=username,
-        password=password,
-        active_usage_token=usage_token
-    )
-    return user
-
-
-@transaction.atomic
-def update_usage_token(user, new_active_usage_token):
-    usage_token = UsageToken.objects.get(value=new_active_usage_token)
-    user.active_usage_token = usage_token
-    user.save()
-    return user
+    results = []
+    for item in payload:
+        try:
+            results.append(
+                {
+                    "name": item["display_name"],
+                    "lat": float(item["lat"]),
+                    "lon": float(item["lon"]),
+                }
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    return results
 
 
-@transaction.atomic
-def use_usage_token(user, use_num=1):
-    usage_token = user.active_usage_token
-    usage_token.uses_left -= use_num
-    user.total_uses_num += 1
-
-    usage_token.save()
-    user.save()
-
-
-def register_visit(request):
-    visitor = register_visitor(request)
-    user_agent = request.META.get('HTTP_USER_AGENT')
-
-    visit = Visit.objects.create(
-        visitor=visitor,
-        user_agent=user_agent,
-    )
-
-    return visit
-
-
-def register_visitor(request):
-    visitor_ip = get_client_ip(request)
-    visitor = Visitor.objects.get_or_create(ip=visitor_ip)[0]
-    return visitor
-
-
-def register_action(request):
-    user = request.user
-    action_url = request.get_full_path()
-    user_agent = request.META.get('HTTP_USER_AGENT')
-
-    action = Action.objects.create(
-        user=user,
-        action_url=action_url,
-        user_agent=user_agent,
-    )
-
-    return action
-
-
-@transaction.atomic
-def register_generate_gpx_action_info(
-        user,
-        from_location,
-        to_location,
-        activity_type,
-        distance,
-        end_time,
-        gpx,
-):
-    gpx_generation_history_record = GpxGenerationHistory.objects.create(
-        user=user,
-        from_location=from_location,
-        to_location=to_location,
-        activity_type=activity_type,
-        distance=distance,
-        end_time=end_time,
-        gpx=gpx,
-    )
-
-    return gpx_generation_history_record
+def generate_gpx(route_points, activity_type, end_time):
+    generator = GpxGen(activity_type=activity_type, end_time=end_time)
+    generator.add_points(route_points)
+    return generator.build()
