@@ -1,5 +1,8 @@
 # Strava Generator — Vercel Edition
 
+[![Tests](https://github.com/Minato1799/strava-generator/actions/workflows/tests.yml/badge.svg)](https://github.com/Minato1799/strava-generator/actions/workflows/tests.yml)
+[![Vercel](https://img.shields.io/badge/Vercel-Live-000000?logo=vercel)](https://strava-generator-opal.vercel.app)
+
 A stateless Django route builder that creates timestamped GPX files for running and cycling activities.
 
 **Live site:** [strava-generator-opal.vercel.app](https://strava-generator-opal.vercel.app)
