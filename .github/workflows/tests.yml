@@ -44,6 +44,15 @@ jobs:
           coverage run --branch --source=mylibs,strava,strava_generator manage.py test tests
           coverage report --skip-covered --fail-under=80
 
+      - name: Check Vercel deployment settings
+        env:
+          DJANGO_SECRET_KEY: ci-deploy-check-only-f7a9c2e4b6d8f1a3c5e7b9d2f4a6c8e0
+          VERCEL: "1"
+          VERCEL_BRANCH_URL: ci-preview.example.vercel.app
+          VERCEL_PROJECT_PRODUCTION_URL: ci-production.example.vercel.app
+          VERCEL_URL: ci-deployment.example.vercel.app
+        run: python manage.py check --deploy --fail-level WARNING
+
       - name: Check JavaScript syntax
         run: node --check strava_generator/static/strava_generator/js/index.js
 
