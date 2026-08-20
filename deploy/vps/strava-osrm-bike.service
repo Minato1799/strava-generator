@@ -1,0 +1,44 @@
+[Unit]
+Description=Private regional OSRM cycling router for Strava Generator
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+ConditionPathExists=/srv/strava-osrm/current/bike/thailand.osrm.partition
+
+[Service]
+Type=simple
+Environment=DOCKER_CONFIG=/run/strava-osrm-bike
+RuntimeDirectory=strava-osrm-bike
+RuntimeDirectoryMode=0700
+ExecStartPre=-/usr/bin/docker rm strava-osrm-bike
+ExecStart=/usr/bin/docker run --name strava-osrm-bike --pull never --read-only --network bridge --publish 127.0.0.1:8732:5000 --volume /srv/strava-osrm/current/bike:/data:ro --tmpfs /tmp:rw,noexec,nosuid,size=16m --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 --memory 1536m --memory-swap 1536m --cpus 1.0 --log-opt max-size=10m --log-opt max-file=3 ghcr.io/project-osrm/osrm-backend@sha256:a7091038e39a73659767f34ef2d389909b42ea80b09bd2bdca482dce2991cbad osrm-routed --algorithm mld --max-viaroute-size 26 /data/thailand.osrm
+ExecStop=/usr/bin/docker stop --timeout 15 strava-osrm-bike
+ExecStopPost=-/usr/bin/docker rm strava-osrm-bike
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=60
+TimeoutStopSec=25
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

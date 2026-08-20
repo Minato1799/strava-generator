@@ -4,6 +4,7 @@ import math
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -24,17 +25,42 @@ def _non_negative_int_env(name, default):
     return value if value >= 0 else default
 
 
-SECRET_KEY = os.getenv(
-    "DJANGO_SECRET_KEY",
-    "local-development-only-key-with-more-than-fifty-characters-2026",
-)
-DEBUG = os.getenv("CONTEXT", "").upper() == "DEBUG"
-IS_VERCEL = bool(os.getenv("VERCEL"))
+IS_VERCEL = os.getenv("VERCEL") == "1"
+configured_secret_key = os.getenv("DJANGO_SECRET_KEY", "").strip()
+if IS_VERCEL and not configured_secret_key:
+    raise RuntimeError("DJANGO_SECRET_KEY must be configured for Vercel deployments")
 
-ALLOWED_HOSTS = ["localhost", "127.0.0.1", ".vercel.app"]
+SECRET_KEY = (
+    configured_secret_key
+    or "local-development-only-key-with-more-than-fifty-characters-2026"
+)
+DEBUG = not IS_VERCEL and os.getenv("CONTEXT", "").upper() == "DEBUG"
+
+
+def _hostname_from_env(name):
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        return None
+    parsed = urlsplit(raw_value if "://" in raw_value else f"//{raw_value}")
+    return parsed.hostname.lower() if parsed.hostname else None
+
+
+ALLOWED_HOSTS = [] if IS_VERCEL else ["localhost", "127.0.0.1"]
+if IS_VERCEL:
+    for variable_name in (
+        "VERCEL_URL",
+        "VERCEL_BRANCH_URL",
+        "VERCEL_PROJECT_PRODUCTION_URL",
+    ):
+        vercel_host = _hostname_from_env(variable_name)
+        if vercel_host and vercel_host not in ALLOWED_HOSTS:
+            ALLOWED_HOSTS.append(vercel_host)
+
 extra_hosts = os.getenv("ALLOWED_HOSTS", "")
 if extra_hosts:
-    ALLOWED_HOSTS.extend(host.strip() for host in extra_hosts.split(",") if host.strip())
+    for extra_host in (host.strip() for host in extra_hosts.split(",")):
+        if extra_host and extra_host not in ALLOWED_HOSTS:
+            ALLOWED_HOSTS.append(extra_host)
 
 INSTALLED_APPS = [
     "django.contrib.staticfiles",
@@ -72,6 +98,11 @@ LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
 USE_I18N = True
 USE_TZ = True
+
+# The largest legitimate request is a 10,000-point GPX generation payload and
+# is comfortably below this ceiling. Django rejects larger bodies before JSON
+# decoding, and the API converts that failure to a small private 413 response.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 1_048_576
 
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"

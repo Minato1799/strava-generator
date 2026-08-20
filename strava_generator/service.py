@@ -37,13 +37,24 @@ ROUTING_BASE_URLS = {
         "https://routing.openstreetmap.de/routed-bike/route/v1/driving",
     ),
 }
+ROUTING_FALLBACK_BASE_URLS = {
+    "run": os.getenv("ROUTING_FOOT_FALLBACK_BASE_URL", "").strip(),
+    "bike": os.getenv("ROUTING_BIKE_FALLBACK_BASE_URL", "").strip(),
+}
+ROUTING_LOCAL_BBOX = os.getenv("ROUTING_LOCAL_BBOX", "").strip()
 SEARCH_URL = os.getenv(
     "GEOCODING_SEARCH_URL",
     "https://nominatim.openstreetmap.org/search",
 )
 REQUEST_HEADERS = {
-    "User-Agent": "StravaGeneratorVercel/2.0 (+https://github.com/Minato1799/strava-generator)",
-    "Referer": "https://strava-generator-opal.vercel.app/",
+    "User-Agent": os.getenv(
+        "PROVIDER_USER_AGENT",
+        "StravaGenerator/3.0 (+https://github.com/Minato1799/strava-generator)",
+    ),
+    "Referer": os.getenv(
+        "PROVIDER_REFERER",
+        "https://strava.scan-realtime.site/",
+    ),
 }
 PACE_LIMITS_SECONDS = {"run": (120.0, 1800.0), "bike": (30.0, 1200.0)}
 
@@ -81,6 +92,10 @@ class RequestValidationError(ValueError):
 
 class ExternalServiceError(RuntimeError):
     pass
+
+
+class RouteNotFoundError(RequestValidationError):
+    """A provider could not connect the requested points on its current graph."""
 
 
 def _now():
@@ -225,6 +240,25 @@ def _cached_provider_call(namespace, key, provider, loader):
 def _provider_identity(url):
     parsed = urlsplit(url)
     return (parsed.scheme.casefold(), parsed.netloc.casefold())
+
+
+def _is_loopback_url(url):
+    hostname = (urlsplit(url).hostname or "").casefold()
+    return hostname in {"127.0.0.1", "::1", "localhost"}
+
+
+def _local_bbox_contains(points):
+    try:
+        west, south, east, north = (
+            float(value.strip()) for value in ROUTING_LOCAL_BBOX.split(",")
+        )
+    except (TypeError, ValueError):
+        return False
+    if not all(math.isfinite(value) for value in (west, south, east, north)):
+        return False
+    if not (-180 <= west < east <= 180 and -90 <= south < north <= 90):
+        return False
+    return all(south <= latitude <= north and west <= longitude <= east for latitude, longitude in points)
 
 
 def _throttle_provider(url, minimum_interval_seconds):
@@ -418,7 +452,12 @@ def _fetch_route(url):
     started_at = _now()
     response = None
     try:
-        _throttle_provider(url, settings.ROUTING_PROVIDER_MIN_INTERVAL_SECONDS)
+        minimum_interval = (
+            0
+            if _is_loopback_url(url)
+            else settings.ROUTING_PROVIDER_MIN_INTERVAL_SECONDS
+        )
+        _throttle_provider(url, minimum_interval)
         # A cache miss performs one request only. Provider failures are surfaced
         # to the caller and are never retried automatically.
         response = requests.get(
@@ -468,7 +507,7 @@ def _fetch_route(url):
             started_at,
             status=_response_status(response),
         )
-        raise RequestValidationError("A route could not be built for these points")
+        raise RouteNotFoundError("A route could not be built for these points")
     if not isinstance(routes, list):
         _log_provider_event(
             "routing",
@@ -570,14 +609,38 @@ def get_route(points, activity_type):
             f"Route distance cannot exceed {MAX_TOTAL_DISTANCE_METERS / 1000:.0f} km"
         )
     coordinates = ";".join(f"{longitude:.7f},{latitude:.7f}" for latitude, longitude in points)
-    base_url = ROUTING_BASE_URLS[activity_type].rstrip("/")
-    url = f"{base_url}/{coordinates}"
-    cache_key = _cache_digest(base_url, activity_type, coordinates)
+    primary_base_url = ROUTING_BASE_URLS[activity_type].rstrip("/")
+    base_urls = []
+    if not _is_loopback_url(primary_base_url) or _local_bbox_contains(points):
+        base_urls.append(primary_base_url)
+    fallback_base_url = ROUTING_FALLBACK_BASE_URLS[activity_type].rstrip("/")
+    if fallback_base_url and fallback_base_url not in base_urls:
+        base_urls.append(fallback_base_url)
+    if not base_urls:
+        raise ExternalServiceError("The routing service is temporarily unavailable")
+    cache_key = _cache_digest(tuple(base_urls), activity_type, coordinates)
+
+    def fetch_route():
+        for index, base_url in enumerate(base_urls):
+            try:
+                return _fetch_route(f"{base_url}/{coordinates}")
+            except (ExternalServiceError, RouteNotFoundError):
+                if index == len(base_urls) - 1:
+                    raise
+                _log_provider_event(
+                    "routing",
+                    "failover",
+                    "next_candidate",
+                    _now(),
+                    level=logging.WARNING,
+                )
+        raise ExternalServiceError("The routing service is temporarily unavailable")
+
     return _cached_provider_call(
         "route",
         cache_key,
         "routing",
-        lambda: _fetch_route(url),
+        fetch_route,
     )
 
 

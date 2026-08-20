@@ -118,6 +118,112 @@ class ServiceValidationTests(SimpleTestCase):
         self.assertIn("/routed-foot/route/v1/driving/", run_url)
         self.assertIn("/routed-bike/route/v1/driving/", bike_url)
 
+    @patch.dict(
+        "strava_generator.service.ROUTING_BASE_URLS",
+        {"run": "http://127.0.0.1:8731/route/v1/foot"},
+    )
+    @patch.dict(
+        "strava_generator.service.ROUTING_FALLBACK_BASE_URLS",
+        {"run": "https://provider.test/route/v1/foot"},
+    )
+    @patch("strava_generator.service.ROUTING_LOCAL_BBOX", "99.3,12.7,101.5,14.8")
+    @patch("strava_generator.service.requests.get")
+    def test_regional_router_falls_back_and_caches_the_result(self, get):
+        points = [(13.73024, 100.53877), (13.72927, 100.54268)]
+        no_route = Mock(status_code=200)
+        no_route.json.return_value = {"code": "NoRoute", "routes": []}
+        fallback = Mock(status_code=200)
+        fallback.json.return_value = {
+            "code": "Ok",
+            "routes": [
+                {
+                    "distance": service.track_distance_meters(points),
+                    "duration": 600,
+                    "geometry": {
+                        "coordinates": [[100.53877, 13.73024], [100.54268, 13.72927]]
+                    },
+                }
+            ],
+        }
+        get.side_effect = [no_route, fallback]
+
+        first = service.get_route(points, "run")
+        second = service.get_route(points, "run")
+
+        self.assertEqual(first, second)
+        self.assertEqual(get.call_count, 2)
+        self.assertTrue(get.call_args_list[0].args[0].startswith("http://127.0.0.1:8731/"))
+        self.assertTrue(get.call_args_list[1].args[0].startswith("https://provider.test/"))
+
+    @patch.dict(
+        "strava_generator.service.ROUTING_BASE_URLS",
+        {"run": "http://127.0.0.1:8731/route/v1/foot"},
+    )
+    @patch.dict(
+        "strava_generator.service.ROUTING_FALLBACK_BASE_URLS",
+        {"run": "https://provider.test/route/v1/foot"},
+    )
+    @patch("strava_generator.service.ROUTING_LOCAL_BBOX", "99.3,12.7,101.5,14.8")
+    @patch("strava_generator.service._throttle_provider")
+    @patch("strava_generator.service.requests.get")
+    def test_loopback_router_is_not_throttled_but_public_fallback_is(self, get, throttle):
+        points = [(13.73024, 100.53877), (13.72927, 100.54268)]
+        local_failure = requests.Timeout("local routing timeout")
+        fallback = Mock(status_code=200)
+        fallback.json.return_value = {
+            "code": "Ok",
+            "routes": [
+                {
+                    "distance": service.track_distance_meters(points),
+                    "duration": 600,
+                    "geometry": {
+                        "coordinates": [[100.53877, 13.73024], [100.54268, 13.72927]]
+                    },
+                }
+            ],
+        }
+        get.side_effect = [local_failure, fallback]
+
+        service.get_route(points, "run")
+
+        self.assertEqual(throttle.call_args_list[0].args[1], 0)
+        self.assertEqual(
+            throttle.call_args_list[1].args[1],
+            service.settings.ROUTING_PROVIDER_MIN_INTERVAL_SECONDS,
+        )
+
+    @patch.dict(
+        "strava_generator.service.ROUTING_BASE_URLS",
+        {"run": "http://127.0.0.1:8731/route/v1/foot"},
+    )
+    @patch.dict(
+        "strava_generator.service.ROUTING_FALLBACK_BASE_URLS",
+        {"run": "https://provider.test/route/v1/foot"},
+    )
+    @patch("strava_generator.service.ROUTING_LOCAL_BBOX", "99.3,12.7,101.5,14.8")
+    @patch("strava_generator.service.requests.get")
+    def test_points_outside_regional_bbox_skip_the_local_router(self, get):
+        points = [(18.7883, 98.9853), (18.7900, 98.9900)]
+        response = Mock(status_code=200)
+        response.json.return_value = {
+            "code": "Ok",
+            "routes": [
+                {
+                    "distance": service.track_distance_meters(points),
+                    "duration": 600,
+                    "geometry": {
+                        "coordinates": [[98.9853, 18.7883], [98.9900, 18.7900]]
+                    },
+                }
+            ],
+        }
+        get.return_value = response
+
+        service.get_route(points, "run")
+
+        get.assert_called_once()
+        self.assertTrue(get.call_args.args[0].startswith("https://provider.test/"))
+
     @patch("strava_generator.service.requests.get")
     def test_identical_routes_are_served_from_bounded_process_cache(self, get):
         points = [(13.73024, 100.53877), (13.72927, 100.54268)]

@@ -1,11 +1,13 @@
-# Strava Generator — Vercel Edition
+# Strava Generator
 
 [![Tests](https://github.com/Minato1799/strava-generator/actions/workflows/tests.yml/badge.svg)](https://github.com/Minato1799/strava-generator/actions/workflows/tests.yml)
 [![Vercel](https://img.shields.io/badge/Vercel-Live-000000?logo=vercel)](https://strava-generator-opal.vercel.app)
 
 A stateless Django route builder that creates timestamped GPX files for running and cycling activities.
 
-**Live site:** [strava-generator-opal.vercel.app](https://strava-generator-opal.vercel.app)
+**Live site:** [strava.scan-realtime.site](https://strava.scan-realtime.site)
+
+**Fallback:** [strava-generator-opal.vercel.app](https://strava-generator-opal.vercel.app)
 
 > Use this project for personal route simulation and testing. Respect Strava's rules and only upload activity data that accurately represents your effort.
 
@@ -77,7 +79,12 @@ Generate a unique Django secret rather than committing one to the repository.
 | `ALLOWED_HOSTS` | No | Comma-separated custom hosts in addition to localhost and `.vercel.app` |
 | `ROUTING_FOOT_BASE_URL` | No | OSRM-compatible endpoint for walking and running routes |
 | `ROUTING_BIKE_BASE_URL` | No | OSRM-compatible endpoint for cycling routes |
+| `ROUTING_FOOT_FALLBACK_BASE_URL` | No | Optional OSRM-compatible fallback after the primary walking graph is unavailable or cannot connect the points |
+| `ROUTING_BIKE_FALLBACK_BASE_URL` | No | Optional OSRM-compatible fallback after the primary cycling graph is unavailable or cannot connect the points |
+| `ROUTING_LOCAL_BBOX` | With a loopback router | `west,south,east,north` bounds; requests outside the regional graph skip directly to the fallback |
 | `GEOCODING_SEARCH_URL` | No | Nominatim-compatible search endpoint |
+| `PROVIDER_USER_AGENT` | No | Contactable application identity sent to routing and geocoding providers |
+| `PROVIDER_REFERER` | No | Public application URL sent to routing and geocoding providers |
 | `PROVIDER_CACHE_MAX_ENTRIES` | No | Maximum cached route and search responses per warm process; default `256` |
 | `ROUTE_CACHE_TTL_SECONDS` | No | Route response cache lifetime; default `300` |
 | `SEARCH_CACHE_TTL_SECONDS` | No | Search response cache lifetime; default `900` |
