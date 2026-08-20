@@ -551,3 +551,27 @@ class HttpFlowTests(SimpleTestCase):
             content_type="text/plain",
         )
         self.assertEqual(response.status_code, 415)
+
+    @patch(
+        "strava_generator.service.get_route",
+        side_effect=service.ExternalServiceError("secret stack path /srv/private/app.py"),
+    )
+    def test_api_does_not_expose_exception_details(self, _get_route):
+        response = self.client.post(
+            "/api/v1/route",
+            data=json.dumps(
+                {
+                    "points": "13.73024,100.53877|13.72927,100.54268",
+                    "activity_type": "run",
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(
+            response.json()["error"],
+            "The routing service is temporarily unavailable",
+        )
+        self.assertNotContains(response, "/srv/private/app.py", status_code=502)
+        self.assertEqual(response["Cache-Control"], "private, no-store")

@@ -16,8 +16,8 @@ class RequestBodyTooLargeError(service.RequestValidationError):
     pass
 
 
-def _error_response(error, status):
-    response = JsonResponse({"code": status, "error": str(error)}, status=status)
+def _error_response(message, status):
+    response = JsonResponse({"code": status, "error": message}, status=status)
     response["Cache-Control"] = "private, no-store"
     return response
 
@@ -42,14 +42,17 @@ def _success_response(payload):
     return response
 
 
-def _validation_error_response(error):
+def _validation_error_response(error, default_message):
     if isinstance(error, UnsupportedMediaTypeError):
         status = 415
+        message = "Content-Type must be application/json"
     elif isinstance(error, RequestBodyTooLargeError):
         status = 413
+        message = "Request body is too large"
     else:
         status = 400
-    return _error_response(error, status)
+        message = default_message
+    return _error_response(message, status)
 
 
 @csrf_exempt
@@ -61,9 +64,9 @@ def route(request):
         activity_type = service.validate_activity_type(payload.get("activity_type", "run"))
         result = service.get_route(points, activity_type)
     except service.RequestValidationError as error:
-        return _validation_error_response(error)
-    except service.ExternalServiceError as error:
-        return _error_response(error, 502)
+        return _validation_error_response(error, "The route request is invalid")
+    except service.ExternalServiceError:
+        return _error_response("The routing service is temporarily unavailable", 502)
 
     return _success_response(
         {
@@ -82,9 +85,9 @@ def search_location(request):
         payload = _json_payload(request)
         results = service.search_locations(payload.get("query", ""))
     except service.RequestValidationError as error:
-        return _validation_error_response(error)
-    except service.ExternalServiceError as error:
-        return _error_response(error, 502)
+        return _validation_error_response(error, "The search request is invalid")
+    except service.ExternalServiceError:
+        return _error_response("Location search is temporarily unavailable", 502)
     return _success_response({"code": 200, "results": results})
 
 
@@ -106,9 +109,9 @@ def get_generated_strava_gpx(request):
             route_distance,
         )
     except service.RequestValidationError as error:
-        return _validation_error_response(error)
-    except ValueError as error:
-        return _error_response(error, 400)
+        return _validation_error_response(error, "The GPX request is invalid")
+    except ValueError:
+        return _error_response("The GPX request is invalid", 400)
 
     return _success_response(
         {
