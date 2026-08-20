@@ -1,11 +1,28 @@
 """Django settings for the stateless Vercel deployment."""
 
+import math
 import os
 import sys
 from pathlib import Path
 
-
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+def _non_negative_float_env(name, default):
+    try:
+        value = float(os.getenv(name, default))
+    except (TypeError, ValueError):
+        return default
+    return value if math.isfinite(value) and value >= 0 else default
+
+
+def _non_negative_int_env(name, default):
+    try:
+        value = int(os.getenv(name, default))
+    except (TypeError, ValueError):
+        return default
+    return value if value >= 0 else default
+
 
 SECRET_KEY = os.getenv(
     "DJANGO_SECRET_KEY",
@@ -69,6 +86,21 @@ SESSION_COOKIE_SECURE = IS_VERCEL
 CSRF_COOKIE_SECURE = IS_VERCEL
 X_FRAME_OPTIONS = "DENY"
 SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
+
+# These caches and throttles are intentionally per process. They reduce duplicate
+# public-provider traffic without introducing a database or retaining route data
+# beyond the lifetime of a warm application instance.
+PROVIDER_CACHE_MAX_ENTRIES = _non_negative_int_env("PROVIDER_CACHE_MAX_ENTRIES", 256)
+ROUTE_CACHE_TTL_SECONDS = _non_negative_float_env("ROUTE_CACHE_TTL_SECONDS", 300.0)
+SEARCH_CACHE_TTL_SECONDS = _non_negative_float_env("SEARCH_CACHE_TTL_SECONDS", 900.0)
+ROUTING_PROVIDER_MIN_INTERVAL_SECONDS = _non_negative_float_env(
+    "ROUTING_PROVIDER_MIN_INTERVAL_SECONDS",
+    1.05,
+)
+GEOCODING_PROVIDER_MIN_INTERVAL_SECONDS = _non_negative_float_env(
+    "GEOCODING_PROVIDER_MIN_INTERVAL_SECONDS",
+    1.05,
+)
 
 LOGGING = {
     "version": 1,

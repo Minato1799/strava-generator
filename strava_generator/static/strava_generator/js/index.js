@@ -253,9 +253,13 @@ async function updateRoute(requestId) {
     state.routeController = controller;
     setRouteStatus('Building route…', 'is-loading');
 
-    const params = new URLSearchParams({ points: pointString(), activity_type: activityType() });
     try {
-        const response = await fetch(`/api/v1/route?${params}`, { signal: controller.signal });
+        const response = await fetch('/api/v1/route', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ points: pointString(), activity_type: activityType() }),
+            signal: controller.signal,
+        });
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error || 'Route could not be built');
         if (requestId !== state.routeRequestId) return;
@@ -304,7 +308,11 @@ async function searchLocations(event) {
     submit.disabled = true;
     submit.textContent = 'Searching…';
     try {
-        const response = await fetch(`/api/v1/search-location?q=${encodeURIComponent(query)}`);
+        const response = await fetch('/api/v1/search-location', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query }),
+        });
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error || 'Location search failed');
         renderSearchResults(payload.results);

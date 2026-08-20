@@ -1,0 +1,5 @@
+-r requirements.in
+
+coverage==7.15.4
+pip-audit==2.10.1
+ruff==0.16.3
