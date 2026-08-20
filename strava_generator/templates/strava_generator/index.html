@@ -32,7 +32,7 @@
             <div class="map-frame">
                 <div id="map" aria-label="Interactive route map"></div>
                 <div id="route-status" class="route-status is-empty" aria-live="polite">Add two points to begin</div>
-                <div class="map-hint">Click the map to add a point · Drag markers to adjust</div>
+                <div class="map-hint">Click to add · Drag to adjust · Run and Bike follow matching paths</div>
             </div>
         </div>
 
@@ -50,26 +50,56 @@
             </ol>
 
             <div class="settings-block">
-                <p class="step-label">02 · ACTIVITY</p>
+                <p class="step-label">02 · ACTIVITY &amp; PACE</p>
                 <fieldset class="activity-options">
                     <legend class="sr-only">Activity type</legend>
                     <label>
                         <input type="radio" name="activity" value="run" checked>
-                        <span><strong>Run</strong><small>3–8 min/km pace</small></span>
+                        <span><strong>Run</strong><small>Walking and running paths</small></span>
                     </label>
                     <label>
                         <input type="radio" name="activity" value="bike">
-                        <span><strong>Bike</strong><small>2–5 min/km pace</small></span>
+                        <span><strong>Bike</strong><small>Cycling-friendly routes</small></span>
                     </label>
                 </fieldset>
+
+                <div class="pace-field">
+                    <div class="pace-label-row">
+                        <label for="pace-input">Average pace</label>
+                        <span id="pace-speed">10.0 km/h</span>
+                    </div>
+                    <div class="pace-control">
+                        <input
+                            id="pace-input"
+                            type="text"
+                            value="6:00"
+                            placeholder="MM:SS"
+                            maxlength="5"
+                            inputmode="numeric"
+                            autocomplete="off"
+                            spellcheck="false"
+                            enterkeyhint="done"
+                            aria-label="Average pace in minutes and seconds per kilometre"
+                            aria-describedby="pace-help pace-error"
+                        >
+                        <span aria-hidden="true">min/km</span>
+                    </div>
+                    <p id="pace-help" class="field-help">Type 5:30, or 530 on a number pad.</p>
+                    <p id="pace-error" class="field-error" role="alert" hidden></p>
+                </div>
             </div>
 
             <div class="settings-block">
                 <p class="step-label">03 · FINISH TIME</p>
                 <div class="time-control">
                     <label class="sr-only" for="finish-time">Finish time</label>
-                    <input id="finish-time" type="datetime-local" step="1">
+                    <input id="finish-time" type="datetime-local" step="1" aria-describedby="finish-error">
                     <button id="set-now" type="button">Now</button>
+                </div>
+                <p id="finish-error" class="field-error" role="alert" hidden></p>
+                <div id="pace-summary" class="pace-summary" role="status" aria-live="polite" aria-atomic="true">
+                    <div><span>Estimated duration</span><strong id="estimated-duration">—</strong></div>
+                    <div><span>Calculated start</span><strong id="calculated-start">—</strong></div>
                 </div>
             </div>
 
@@ -77,7 +107,7 @@
                 <span>Generate GPX</span><span aria-hidden="true">↓</span>
             </button>
 
-            <p class="use-note">For personal route simulation and testing. Respect Strava’s rules and only upload activity data that accurately represents your effort.</p>
+            <p class="use-note">Enter your actual pace and only upload activity data that represents your effort. Route coordinates are sent to OpenStreetMap community services for calculation.</p>
         </aside>
     </section>
 </main>

@@ -1,10 +1,8 @@
-"""Create GPX 1.1 tracks with varied, activity-appropriate pacing."""
+"""Create GPX 1.1 tracks with a user-selected, constant pace."""
 
 import math
-import random
 from datetime import datetime, timedelta, timezone
 from xml.etree import ElementTree
-
 
 GPX_NAMESPACE = "http://www.topografix.com/GPX/1/1"
 XSI_NAMESPACE = "http://www.w3.org/2001/XMLSchema-instance"
@@ -15,7 +13,7 @@ ElementTree.register_namespace("xsi", XSI_NAMESPACE)
 
 
 class GpxGen:
-    def __init__(self, *, activity_type="run", end_time=None, random_source=None):
+    def __init__(self, *, activity_type="run", end_time=None, duration_seconds=None):
         if activity_type not in {"run", "bike"}:
             raise ValueError("Activity type must be run or bike")
         self.activity_type = activity_type
@@ -23,8 +21,12 @@ class GpxGen:
         if self.end_time.tzinfo is None:
             self.end_time = self.end_time.replace(tzinfo=timezone.utc)
         self.end_time = self.end_time.astimezone(timezone.utc)
+        self.duration_seconds = float(duration_seconds) if duration_seconds is not None else None
+        if self.duration_seconds is None or not math.isfinite(self.duration_seconds):
+            raise ValueError("A finite activity duration is required")
+        if self.duration_seconds <= 0:
+            raise ValueError("Activity duration must be positive")
         self.points = []
-        self.random = random_source or random.Random()
 
     def add_point(self, point):
         latitude, longitude = point
@@ -46,23 +48,41 @@ class GpxGen:
         )
         return 2 * EARTH_RADIUS_KM * math.asin(math.sqrt(haversine))
 
-    def _segment_seconds(self):
-        pace_range = (3.2, 7.8) if self.activity_type == "run" else (2.0, 5.0)
-        durations = []
-        current_pace = self.random.uniform(*pace_range)
-        for index in range(1, len(self.points)):
-            if index % 20 == 0:
-                current_pace = self.random.uniform(*pace_range)
-            distance_km = self._distance_km(self.points[index - 1], self.points[index])
-            durations.append(max(distance_km * current_pace * 60, 0.1))
-        return durations
+    def _segment_milliseconds(self):
+        distances = [
+            self._distance_km(self.points[index - 1], self.points[index])
+            for index in range(1, len(self.points))
+        ]
+        total_distance = sum(distances)
+        if total_distance <= 0:
+            raise ValueError("Route points must cover a positive distance")
+
+        total_milliseconds = round(self.duration_seconds * 1000)
+        segment_count = len(distances)
+        if total_milliseconds < segment_count:
+            raise ValueError("Activity duration is too short for the route detail")
+
+        # Reserve one millisecond for every segment so GPX timestamps remain
+        # strictly increasing, then distribute the remaining duration by distance.
+        remaining = total_milliseconds - segment_count
+        weighted = [remaining * distance / total_distance for distance in distances]
+        allocated = [math.floor(value) for value in weighted]
+        remainder = remaining - sum(allocated)
+        remainder_order = sorted(
+            range(segment_count),
+            key=lambda index: weighted[index] - allocated[index],
+            reverse=True,
+        )
+        for index in remainder_order[:remainder]:
+            allocated[index] += 1
+        return [milliseconds + 1 for milliseconds in allocated]
 
     def build(self):
         if len(self.points) < 2:
             raise ValueError("At least two route points are required")
 
-        durations = self._segment_seconds()
-        start_time = self.end_time - timedelta(seconds=sum(durations))
+        durations = self._segment_milliseconds()
+        start_time = self.end_time - timedelta(milliseconds=sum(durations))
 
         root = ElementTree.Element(
             f"{{{GPX_NAMESPACE}}}gpx",
@@ -84,10 +104,17 @@ class GpxGen:
         track_name.text = f"Generated {self.activity_type.title()} Activity"
         segment = ElementTree.SubElement(track, f"{{{GPX_NAMESPACE}}}trkseg")
 
-        point_time = start_time
+        elapsed_milliseconds = 0
+        last_point_index = len(self.points) - 1
         for index, (latitude, longitude) in enumerate(self.points):
-            if index:
-                point_time += timedelta(seconds=durations[index - 1])
+            # Force the final point to the requested finish time. Building a
+            # timedelta from floating-point segment lengths can otherwise end
+            # one microsecond early and format as xx:xx:59.999Z.
+            point_time = (
+                self.end_time
+                if index == last_point_index
+                else start_time + timedelta(milliseconds=elapsed_milliseconds)
+            )
             track_point = ElementTree.SubElement(
                 segment,
                 f"{{{GPX_NAMESPACE}}}trkpt",
@@ -95,6 +122,8 @@ class GpxGen:
             )
             time_element = ElementTree.SubElement(track_point, f"{{{GPX_NAMESPACE}}}time")
             time_element.text = self._format_time(point_time)
+            if index < len(durations):
+                elapsed_milliseconds += durations[index]
 
         ElementTree.indent(root, space="  ")
         return ElementTree.tostring(root, encoding="unicode", xml_declaration=True)
