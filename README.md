@@ -13,10 +13,10 @@ A stateless Django route builder that creates timestamped GPX files for running 
 
 - Interactive Leaflet and OpenStreetMap route builder
 - Location search powered by Nominatim
-- Foot and bike routing powered by OSRM
+- Separate foot and bike routing profiles powered by OSRM, including mapped park paths
 - Reorderable and draggable route points
-- Run and bike pacing profiles
-- Custom finish time and GPX 1.1 export
+- Manual `MM:SS` pace (or number-pad digits such as `530`) with live speed, duration, and calculated start time
+- Custom finish time and deterministic GPX 1.1 timestamps
 - Stateless deployment: no account, database, or Google Maps API key required
 - Zero-configuration Django deployment on Vercel
 
@@ -25,12 +25,12 @@ A stateless Django route builder that creates timestamped GPX files for running 
 ```text
 Browser (Leaflet UI)
   ├─ /api/v1/search-location  → Nominatim
-  ├─ /api/v1/route            → OSRM
-  └─ /api/v1/generate-strava-gpx
+  ├─ /api/v1/route            → OSRM foot or bike profile
+  └─ POST /api/v1/generate-strava-gpx
        └─ Django + Python GPX generator
 ```
 
-The app intentionally does not persist users, routes, or generated files. Public OpenStreetMap services are suitable for normal, low-volume use but do not provide a production SLA.
+The app intentionally does not persist users, routes, or generated files. The browser reuses the route geometry it has already fetched when generating a GPX, avoiding a duplicate routing request. Public OpenStreetMap services are suitable for normal, low-volume use but do not provide a production SLA; follow the [routing service usage policy](https://routing.openstreetmap.de/about.html).
 
 ## Local development
 
@@ -70,6 +70,8 @@ Generate a unique Django secret rather than committing one to the repository.
 | --- | --- | --- |
 | `DJANGO_SECRET_KEY` | Production | Django cryptographic signing key |
 | `ALLOWED_HOSTS` | No | Comma-separated custom hosts in addition to localhost and `.vercel.app` |
+| `ROUTING_FOOT_BASE_URL` | No | OSRM-compatible endpoint for walking and running routes |
+| `ROUTING_BIKE_BASE_URL` | No | OSRM-compatible endpoint for cycling routes |
 | `CONTEXT=DEBUG` | Local only | Enables Django debug mode |
 
 ## Upstream and license
