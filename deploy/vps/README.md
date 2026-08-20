@@ -2,6 +2,8 @@
 
 These files provide two small systemd jobs for the production VPS:
 
+- `strava-generator.service` runs the application from the atomic `current`
+  release symlink with one process and eight threads.
 - `strava-healthcheck.timer` checks the local Django health endpoint every two
   minutes and attempts at most one service restart after a failure.
 - `strava-config-backup.timer` creates a root-only configuration archive each
@@ -24,6 +26,13 @@ systemctl enable --now strava-healthcheck.timer strava-config-backup.timer
 systemctl start strava-healthcheck.service strava-config-backup.service
 systemctl list-timers 'strava-*'
 ```
+
+Production geocoding intentionally stays on the public Nominatim endpoint only
+while traffic is low. The single Gunicorn process makes the in-process 1.05
+second geocoding interval apply across all application threads, while a
+15-minute bounded cache and Cloudflare edge rate limit reduce duplicate and
+abusive requests. Do not increase the worker count without first moving
+geocoding to a managed/self-hosted provider or adding a shared global limiter.
 
 The OSRM services expect a preprocessed regional MLD dataset at
 `/srv/strava-osrm/current/{foot,bike}/thailand.osrm.*`. Build a new version in a
