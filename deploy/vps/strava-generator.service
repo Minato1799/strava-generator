@@ -1,0 +1,40 @@
+[Unit]
+Description=Strava Generator Django application
+After=network-online.target strava-osrm-foot.service strava-osrm-bike.service
+Wants=network-online.target strava-osrm-foot.service strava-osrm-bike.service
+
+[Service]
+Type=simple
+User=strava-generator
+Group=strava-generator
+WorkingDirectory=/opt/strava-generator/current
+EnvironmentFile=/etc/strava-generator.env
+ExecStart=/opt/strava-generator/venv/bin/gunicorn --bind 127.0.0.1:8720 --worker-class gthread --workers 1 --threads 8 --timeout 30 --graceful-timeout 15 --keep-alive 5 --no-control-socket --access-logfile - --error-logfile - strava.wsgi:application
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
