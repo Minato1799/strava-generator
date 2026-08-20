@@ -1,0 +1,11 @@
+[Unit]
+Description=Back up Strava Generator configuration daily
+
+[Timer]
+OnCalendar=*-*-* 03:17:00 Asia/Bangkok
+RandomizedDelaySec=10min
+Persistent=true
+Unit=strava-config-backup.service
+
+[Install]
+WantedBy=timers.target

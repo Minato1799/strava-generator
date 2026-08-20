@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the Strava Generator health check every two minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=15s
+RandomizedDelaySec=15s
+Persistent=true
+Unit=strava-healthcheck.service
+
+[Install]
+WantedBy=timers.target
