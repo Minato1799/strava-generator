@@ -24,6 +24,7 @@ MAX_ROUTE_POINTS = 26
 MAX_ROUTE_POINTS_TEXT_LENGTH = 4_096
 MAX_TRACK_POINTS = 10_000
 MAX_SEARCH_RESULTS = 5
+MAX_ACTIVITY_NAME_LENGTH = 120
 MAX_TOTAL_DISTANCE_METERS = 50_000
 DISTANCE_RELATIVE_TOLERANCE = 0.05
 DISTANCE_ABSOLUTE_TOLERANCE_METERS = 25
@@ -427,6 +428,32 @@ def parse_pace(raw_pace, activity_type):
     return pace_seconds
 
 
+def parse_activity_name(raw_name, activity_type):
+    activity_type = validate_activity_type(activity_type)
+    default_name = f"Generated {activity_type.title()} Activity"
+    if raw_name is None:
+        return default_name
+    if not isinstance(raw_name, str):
+        raise RequestValidationError("Activity name must be text")
+
+    name = " ".join(raw_name.split())
+    if not name:
+        raise RequestValidationError("Activity name is required")
+    if len(name) > MAX_ACTIVITY_NAME_LENGTH:
+        raise RequestValidationError(
+            f"Activity name cannot exceed {MAX_ACTIVITY_NAME_LENGTH} characters"
+        )
+    if not all(
+        character in "\t\n\r"
+        or 0x20 <= ord(character) <= 0xD7FF
+        or 0xE000 <= ord(character) <= 0xFFFD
+        or 0x10000 <= ord(character) <= 0x10FFFF
+        for character in name
+    ):
+        raise RequestValidationError("Activity name contains invalid XML characters")
+    return name
+
+
 def parse_end_time(raw_end_time):
     if raw_end_time in (None, ""):
         return datetime.now(UTC)
@@ -742,6 +769,7 @@ def generate_gpx(
     end_time,
     pace_seconds_per_km,
     route_distance_meters,
+    activity_name=None,
 ):
     route_points = deduplicate_track_points(route_points)
     validate_track_distance(route_points, route_distance_meters)
@@ -755,6 +783,7 @@ def generate_gpx(
         raise RequestValidationError("Finish time is too early for this route and pace") from None
     generator = GpxGen(
         activity_type=activity_type,
+        activity_name=activity_name,
         end_time=end_time,
         duration_seconds=duration_seconds,
     )

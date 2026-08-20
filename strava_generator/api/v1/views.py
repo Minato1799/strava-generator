@@ -99,6 +99,7 @@ def get_generated_strava_gpx(request):
         route_points = service.parse_track_points(payload.get("route_points"))
         route_distance = service.parse_route_distance(payload.get("route_distance"))
         activity_type = service.validate_activity_type(payload.get("activity_type", "run"))
+        activity_name = service.parse_activity_name(payload.get("activity_name"), activity_type)
         end_time = service.parse_end_time(payload.get("end_time", ""))
         pace_seconds_per_km = service.parse_pace(payload.get("pace", ""), activity_type)
         generated = service.generate_gpx(
@@ -107,6 +108,7 @@ def get_generated_strava_gpx(request):
             end_time,
             pace_seconds_per_km,
             route_distance,
+            activity_name,
         )
     except service.RequestValidationError as error:
         return _validation_error_response(error, "The GPX request is invalid")

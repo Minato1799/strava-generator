@@ -54,7 +54,9 @@ jobs:
         run: python manage.py check --deploy --fail-level WARNING
 
       - name: Check JavaScript syntax
-        run: node --check strava_generator/static/strava_generator/js/index.js
+        run: |
+          node --check strava_generator/static/strava_generator/js/index.js
+          node --check strava_generator/static/strava_generator/js/gpx-import.js
 
       - name: Audit Python dependencies
         run: pip-audit --require-hashes -r requirements.txt

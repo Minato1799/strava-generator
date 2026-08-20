@@ -94,6 +94,15 @@ class ServiceValidationTests(SimpleTestCase):
         with self.assertRaises(service.RequestValidationError):
             service.parse_pace("1:59", "run")
 
+    def test_parse_activity_name_normalizes_text_and_defaults(self):
+        self.assertEqual(service.parse_activity_name(None, "run"), "Generated Run Activity")
+        self.assertEqual(service.parse_activity_name("  วิ่ง   ช่วงเย็น  ", "run"), "วิ่ง ช่วงเย็น")
+
+    def test_parse_activity_name_rejects_invalid_values(self):
+        for value in ("", "   ", ["Evening Run"], "x" * 121, "Run\x00Hidden"):
+            with self.subTest(value=value), self.assertRaises(service.RequestValidationError):
+                service.parse_activity_name(value, "run")
+
     @patch("strava_generator.service.requests.get")
     def test_routing_uses_separate_foot_and_bike_graphs(self, get):
         points = [(13.73024, 100.53877), (13.72927, 100.54268)]
@@ -441,6 +450,23 @@ class GpxGeneratorTests(SimpleTestCase):
         timestamp_values = [timestamp.text for timestamp in timestamps]
         self.assertTrue(all(first < second for first, second in pairwise(timestamp_values)))
 
+    def test_generates_activity_name_and_strava_style_track_type(self):
+        finish = datetime(2026, 8, 19, 9, 30, tzinfo=UTC)
+        generator = GpxGen(
+            activity_type="run",
+            activity_name="วิ่งช่วงเย็น & easy",
+            end_time=finish,
+            duration_seconds=330,
+        )
+        generator.add_points([(13.7563, 100.5018), (13.75, 100.51)])
+
+        document = ElementTree.fromstring(generator.build())
+        name = document.find(f".//{{{GPX_NAMESPACE}}}trk/{{{GPX_NAMESPACE}}}name")
+        track_type = document.find(f".//{{{GPX_NAMESPACE}}}trk/{{{GPX_NAMESPACE}}}type")
+
+        self.assertEqual(name.text, "วิ่งช่วงเย็น & easy")
+        self.assertEqual(track_type.text, "running")
+
     def test_same_inputs_generate_identical_gpx(self):
         finish = datetime(2026, 8, 19, 9, 30, tzinfo=UTC)
 
@@ -465,6 +491,10 @@ class HttpFlowTests(SimpleTestCase):
 
         self.assertEqual(home.status_code, 200)
         self.assertContains(home, "No account or API key required")
+        self.assertContains(home, "Import GPX")
+        self.assertContains(home, "gpx-import.js")
+        self.assertContains(home, 'name="timing-mode"', count=2)
+        self.assertContains(home, 'id="activity-name"')
         self.assertJSONEqual(health.content, {"status": "ok"})
 
     @patch("strava_generator.service.get_route", return_value=route_result)
@@ -563,6 +593,7 @@ class HttpFlowTests(SimpleTestCase):
                     "route_points": self.route_result["points"],
                     "route_distance": self.route_result["distance"],
                     "activity_type": "bike",
+                    "activity_name": "ปั่นช่วงเช้า",
                     "end_time": "2026-08-19T09:30:00Z",
                     "pace": "3:00",
                 }
@@ -576,6 +607,11 @@ class HttpFlowTests(SimpleTestCase):
         self.assertEqual(response.json()["duration_seconds"], 688)
         self.assertEqual(response.json()["start_time"], "2026-08-19T09:18:32Z")
         self.assertEqual(response["Cache-Control"], "private, no-store")
+        document = ElementTree.fromstring(response.json()["gpx"])
+        name = document.find(f".//{{{GPX_NAMESPACE}}}trk/{{{GPX_NAMESPACE}}}name")
+        track_type = document.find(f".//{{{GPX_NAMESPACE}}}trk/{{{GPX_NAMESPACE}}}type")
+        self.assertEqual(name.text, "ปั่นช่วงเช้า")
+        self.assertEqual(track_type.text, "cycling")
 
     def test_generate_rejects_invalid_pace(self):
         response = self.client.post(
@@ -593,6 +629,25 @@ class HttpFlowTests(SimpleTestCase):
         )
 
         self.assertEqual(response.status_code, 400)
+
+    def test_generate_rejects_invalid_activity_name(self):
+        response = self.client.post(
+            "/api/v1/generate-strava-gpx",
+            data=json.dumps(
+                {
+                    "route_points": self.route_result["points"],
+                    "route_distance": self.route_result["distance"],
+                    "activity_type": "run",
+                    "activity_name": "Run\u0000Hidden",
+                    "end_time": "2026-08-19T09:30:00Z",
+                    "pace": "6:00",
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response["Cache-Control"], "private, no-store")
 
     def test_generate_rejects_distance_mismatch_and_time_underflow(self):
         base_payload = {
