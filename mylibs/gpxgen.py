@@ -1,7 +1,7 @@
 """Create GPX 1.1 tracks with a user-selected, constant pace."""
 
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from xml.etree import ElementTree
 
 GPX_NAMESPACE = "http://www.topografix.com/GPX/1/1"
@@ -17,10 +17,10 @@ class GpxGen:
         if activity_type not in {"run", "bike"}:
             raise ValueError("Activity type must be run or bike")
         self.activity_type = activity_type
-        self.end_time = end_time or datetime.now(timezone.utc)
+        self.end_time = end_time or datetime.now(UTC)
         if self.end_time.tzinfo is None:
-            self.end_time = self.end_time.replace(tzinfo=timezone.utc)
-        self.end_time = self.end_time.astimezone(timezone.utc)
+            self.end_time = self.end_time.replace(tzinfo=UTC)
+        self.end_time = self.end_time.astimezone(UTC)
         self.duration_seconds = float(duration_seconds) if duration_seconds is not None else None
         if self.duration_seconds is None or not math.isfinite(self.duration_seconds):
             raise ValueError("A finite activity duration is required")
@@ -130,4 +130,4 @@ class GpxGen:
 
     @staticmethod
     def _format_time(value):
-        return value.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        return value.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")

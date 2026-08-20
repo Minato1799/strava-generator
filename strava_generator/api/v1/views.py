@@ -1,28 +1,74 @@
 import json
 
+from django.core.exceptions import RequestDataTooBig
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_GET, require_POST
+from django.views.decorators.http import require_POST
 
 from ... import service
 
 
-def _error_response(error, status):
-    return JsonResponse({"code": status, "error": str(error)}, status=status)
+class UnsupportedMediaTypeError(service.RequestValidationError):
+    pass
 
 
-@require_GET
+class RequestBodyTooLargeError(service.RequestValidationError):
+    pass
+
+
+def _error_response(message, status):
+    response = JsonResponse({"code": status, "error": message}, status=status)
+    response["Cache-Control"] = "private, no-store"
+    return response
+
+
+def _json_payload(request):
+    if request.content_type != "application/json":
+        raise UnsupportedMediaTypeError("Content-Type must be application/json")
+    try:
+        payload = json.loads(request.body or b"{}")
+    except RequestDataTooBig:
+        raise RequestBodyTooLargeError("Request body is too large") from None
+    except (RecursionError, UnicodeDecodeError, ValueError):
+        raise service.RequestValidationError("Request body must be valid JSON") from None
+    if not isinstance(payload, dict):
+        raise service.RequestValidationError("Request body must be a JSON object")
+    return payload
+
+
+def _success_response(payload):
+    response = JsonResponse(payload)
+    response["Cache-Control"] = "private, no-store"
+    return response
+
+
+def _validation_error_response(error, default_message):
+    if isinstance(error, UnsupportedMediaTypeError):
+        status = 415
+        message = "Content-Type must be application/json"
+    elif isinstance(error, RequestBodyTooLargeError):
+        status = 413
+        message = "Request body is too large"
+    else:
+        status = 400
+        message = default_message
+    return _error_response(message, status)
+
+
+@csrf_exempt
+@require_POST
 def route(request):
     try:
-        points = service.parse_points(request.GET.get("points", ""))
-        activity_type = service.validate_activity_type(request.GET.get("activity_type", "run"))
+        payload = _json_payload(request)
+        points = service.parse_points(payload.get("points", ""))
+        activity_type = service.validate_activity_type(payload.get("activity_type", "run"))
         result = service.get_route(points, activity_type)
     except service.RequestValidationError as error:
-        return _error_response(error, 400)
-    except service.ExternalServiceError as error:
-        return _error_response(error, 502)
+        return _validation_error_response(error, "The route request is invalid")
+    except service.ExternalServiceError:
+        return _error_response("The routing service is temporarily unavailable", 502)
 
-    return JsonResponse(
+    return _success_response(
         {
             "code": 200,
             "route": result["points"],
@@ -32,29 +78,24 @@ def route(request):
     )
 
 
-@require_GET
+@csrf_exempt
+@require_POST
 def search_location(request):
     try:
-        results = service.search_locations(request.GET.get("q", ""))
+        payload = _json_payload(request)
+        results = service.search_locations(payload.get("query", ""))
     except service.RequestValidationError as error:
-        return _error_response(error, 400)
-    except service.ExternalServiceError as error:
-        return _error_response(error, 502)
-    return JsonResponse({"code": 200, "results": results})
+        return _validation_error_response(error, "The search request is invalid")
+    except service.ExternalServiceError:
+        return _error_response("Location search is temporarily unavailable", 502)
+    return _success_response({"code": 200, "results": results})
 
 
 @csrf_exempt
 @require_POST
 def get_generated_strava_gpx(request):
-    if request.content_type != "application/json":
-        return _error_response(
-            service.RequestValidationError("Content-Type must be application/json"),
-            415,
-        )
     try:
-        payload = json.loads(request.body or b"{}")
-        if not isinstance(payload, dict):
-            raise service.RequestValidationError("Request body must be a JSON object")
+        payload = _json_payload(request)
         route_points = service.parse_track_points(payload.get("route_points"))
         route_distance = service.parse_route_distance(payload.get("route_distance"))
         activity_type = service.validate_activity_type(payload.get("activity_type", "run"))
@@ -67,14 +108,12 @@ def get_generated_strava_gpx(request):
             pace_seconds_per_km,
             route_distance,
         )
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return _error_response(service.RequestValidationError("Request body must be valid JSON"), 400)
     except service.RequestValidationError as error:
-        return _error_response(error, 400)
-    except ValueError as error:
-        return _error_response(error, 400)
+        return _validation_error_response(error, "The GPX request is invalid")
+    except ValueError:
+        return _error_response("The GPX request is invalid", 400)
 
-    response = JsonResponse(
+    return _success_response(
         {
             "code": 200,
             "gpx": generated["gpx"],
@@ -84,5 +123,3 @@ def get_generated_strava_gpx(request):
             "start_time": generated["start_time"].isoformat().replace("+00:00", "Z"),
         }
     )
-    response["Cache-Control"] = "private, no-store"
-    return response

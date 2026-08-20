@@ -1,0 +1,7 @@
+# The repository owner reviews changes by default, with explicit coverage for
+# deployment, automation, and security-sensitive policy files.
+* @Minato1799
+/.github/ @Minato1799
+/strava/ @Minato1799
+/strava_generator/api/ @Minato1799
+/SECURITY.md @Minato1799
