@@ -7,16 +7,25 @@ from xml.etree import ElementTree
 GPX_NAMESPACE = "http://www.topografix.com/GPX/1/1"
 XSI_NAMESPACE = "http://www.w3.org/2001/XMLSchema-instance"
 EARTH_RADIUS_KM = 6371.0088
+ACTIVITY_GPX_TYPES = {"run": "running", "bike": "cycling"}
 
 ElementTree.register_namespace("", GPX_NAMESPACE)
 ElementTree.register_namespace("xsi", XSI_NAMESPACE)
 
 
 class GpxGen:
-    def __init__(self, *, activity_type="run", end_time=None, duration_seconds=None):
+    def __init__(
+        self,
+        *,
+        activity_type="run",
+        activity_name=None,
+        end_time=None,
+        duration_seconds=None,
+    ):
         if activity_type not in {"run", "bike"}:
             raise ValueError("Activity type must be run or bike")
         self.activity_type = activity_type
+        self.activity_name = activity_name or f"Generated {activity_type.title()} Activity"
         self.end_time = end_time or datetime.now(UTC)
         if self.end_time.tzinfo is None:
             self.end_time = self.end_time.replace(tzinfo=UTC)
@@ -101,7 +110,9 @@ class GpxGen:
 
         track = ElementTree.SubElement(root, f"{{{GPX_NAMESPACE}}}trk")
         track_name = ElementTree.SubElement(track, f"{{{GPX_NAMESPACE}}}name")
-        track_name.text = f"Generated {self.activity_type.title()} Activity"
+        track_name.text = self.activity_name
+        track_type = ElementTree.SubElement(track, f"{{{GPX_NAMESPACE}}}type")
+        track_type.text = ACTIVITY_GPX_TYPES[self.activity_type]
         segment = ElementTree.SubElement(track, f"{{{GPX_NAMESPACE}}}trkseg")
 
         elapsed_milliseconds = 0

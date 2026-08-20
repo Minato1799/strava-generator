@@ -26,6 +26,8 @@
                     <button type="submit">Search</button>
                     <div id="search-results" class="search-results" hidden></div>
                 </form>
+                <button id="import-gpx" class="ghost-button import-button" type="button">Import GPX</button>
+                <input id="gpx-file" type="file" accept=".gpx,application/gpx+xml,application/xml,text/xml" hidden>
                 <button id="clear-route" class="ghost-button" type="button">Clear route</button>
             </div>
 
@@ -40,7 +42,7 @@
             <div class="panel-heading">
                 <div>
                     <p class="step-label">01 · ROUTE</p>
-                    <h2>Route points</h2>
+                    <h2 id="route-heading">Route points</h2>
                 </div>
                 <span id="point-count" class="count-pill">0 / 26</span>
             </div>
@@ -49,8 +51,19 @@
                 <li class="empty-points">Your route points will appear here.</li>
             </ol>
 
+            <section id="import-summary" class="import-summary" aria-live="polite" hidden>
+                <strong id="import-file-name"></strong>
+                <span id="import-details"></span>
+                <small id="import-privacy">Parsed locally. The file, timestamps and sensors are not uploaded; displaying the map requests surrounding OpenStreetMap tiles.</small>
+            </section>
+
             <div class="settings-block">
                 <p class="step-label">02 · ACTIVITY &amp; PACE</p>
+                <div class="text-field">
+                    <label for="activity-name">Activity name</label>
+                    <input id="activity-name" type="text" value="Generated Run Activity" maxlength="120" autocomplete="off" aria-describedby="activity-name-error">
+                    <p id="activity-name-error" class="field-error" role="alert" hidden></p>
+                </div>
                 <fieldset class="activity-options">
                     <legend class="sr-only">Activity type</legend>
                     <label>
@@ -63,7 +76,20 @@
                     </label>
                 </fieldset>
 
-                <div class="pace-field">
+                <fieldset id="timing-options" class="timing-options" hidden>
+                    <legend>Imported timestamps</legend>
+                    <label>
+                        <input type="radio" name="timing-mode" value="preserve" checked>
+                        <span><strong>Preserve</strong><small>Keep original time, elevation and sensors</small></span>
+                    </label>
+                    <label>
+                        <input type="radio" name="timing-mode" value="retime">
+                        <span><strong>Re-time</strong><small>New time from pace; remove sensor extensions</small></span>
+                    </label>
+                    <p id="preserve-error" class="field-error" role="status" hidden></p>
+                </fieldset>
+
+                <div id="pace-field" class="pace-field">
                     <div class="pace-label-row">
                         <label for="pace-input">Average pace</label>
                         <span id="pace-speed">10.0 km/h</span>
@@ -89,17 +115,17 @@
                 </div>
             </div>
 
-            <div class="settings-block">
-                <p class="step-label">03 · FINISH TIME</p>
-                <div class="time-control">
+            <div id="finish-settings" class="settings-block">
+                <p id="finish-step-label" class="step-label">03 · FINISH TIME</p>
+                <div id="finish-control" class="time-control">
                     <label class="sr-only" for="finish-time">Finish time</label>
                     <input id="finish-time" type="datetime-local" step="1" aria-describedby="finish-error">
                     <button id="set-now" type="button">Now</button>
                 </div>
                 <p id="finish-error" class="field-error" role="alert" hidden></p>
                 <div id="pace-summary" class="pace-summary" role="status" aria-live="polite" aria-atomic="true">
-                    <div><span>Estimated duration</span><strong id="estimated-duration">—</strong></div>
-                    <div><span>Calculated start</span><strong id="calculated-start">—</strong></div>
+                    <div><span id="duration-label">Estimated duration</span><strong id="estimated-duration">—</strong></div>
+                    <div><span id="start-label">Calculated start</span><strong id="calculated-start">—</strong></div>
                 </div>
             </div>
 
@@ -107,7 +133,7 @@
                 <span>Generate GPX</span><span aria-hidden="true">↓</span>
             </button>
 
-            <p class="use-note">Enter your actual pace and only upload data that represents your effort. Search text and route coordinates are sent to OpenStreetMap community services; do not enter private or confidential locations.</p>
+            <p class="use-note">Enter your actual pace and only upload data that represents your effort. Imported GPX content stays in your browser, while the map loads surrounding OpenStreetMap tiles. Preserve keeps original sensor data; Re-time removes it. Search text and manually drawn route coordinates are sent to OpenStreetMap community services; do not enter private or confidential locations.</p>
         </aside>
     </section>
 </main>
@@ -116,5 +142,6 @@
 {% endblock %}
 
 {% block js %}
+    <script src="{% static 'strava_generator/js/gpx-import.js' %}" defer></script>
     <script src="{% static 'strava_generator/js/index.js' %}" defer></script>
 {% endblock %}

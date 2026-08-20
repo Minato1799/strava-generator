@@ -4,6 +4,7 @@ const ACTIVITY_MINIMUMS = { run: 3000, bike: 5000 };
 const ROUTE_DEBOUNCE_MS = 1100;
 const DEFAULT_PACE_VALUES = { run: '6:00', bike: '3:00' };
 const PACE_LIMITS_SECONDS = { run: [120, 1800], bike: [30, 1200] };
+const MAX_MAP_DISPLAY_POINTS = 5000;
 
 const state = {
     map: null,
@@ -19,16 +20,32 @@ const state = {
     generationController: null,
     generationRequestId: 0,
     paceByActivity: { ...DEFAULT_PACE_VALUES },
+    importedTrack: null,
+    importRequestId: 0,
+    activityNameTouched: false,
 };
 
 const elements = {
     searchForm: document.querySelector('#search-form'),
     searchInput: document.querySelector('#location-search'),
     searchResults: document.querySelector('#search-results'),
+    importGpx: document.querySelector('#import-gpx'),
+    gpxFile: document.querySelector('#gpx-file'),
     clearRoute: document.querySelector('#clear-route'),
     routeStatus: document.querySelector('#route-status'),
+    mapHint: document.querySelector('.map-hint'),
+    routeHeading: document.querySelector('#route-heading'),
     pointList: document.querySelector('#point-list'),
     pointCount: document.querySelector('#point-count'),
+    importSummary: document.querySelector('#import-summary'),
+    importFileName: document.querySelector('#import-file-name'),
+    importDetails: document.querySelector('#import-details'),
+    activityName: document.querySelector('#activity-name'),
+    activityNameError: document.querySelector('#activity-name-error'),
+    timingOptions: document.querySelector('#timing-options'),
+    preserveOption: document.querySelector('input[name="timing-mode"][value="preserve"]'),
+    preserveError: document.querySelector('#preserve-error'),
+    paceField: document.querySelector('#pace-field'),
     pace: document.querySelector('#pace-input'),
     paceSpeed: document.querySelector('#pace-speed'),
     paceError: document.querySelector('#pace-error'),
@@ -36,6 +53,10 @@ const elements = {
     calculatedStart: document.querySelector('#calculated-start'),
     finishTime: document.querySelector('#finish-time'),
     finishError: document.querySelector('#finish-error'),
+    finishStepLabel: document.querySelector('#finish-step-label'),
+    finishControl: document.querySelector('#finish-control'),
+    durationLabel: document.querySelector('#duration-label'),
+    startLabel: document.querySelector('#start-label'),
     setNow: document.querySelector('#set-now'),
     generate: document.querySelector('#generate-gpx'),
     toast: document.querySelector('#toast'),
@@ -49,14 +70,32 @@ function initialise() {
     }).addTo(state.map);
 
     state.map.on('click', (event) => {
+        if (state.importedTrack) {
+            showError('Clear the imported GPX before drawing a new route.');
+            return;
+        }
         const { lat, lng } = event.latlng;
         addPoint(lat, lng, `Pinned point ${state.markers.length + 1}`);
     });
 
     elements.searchForm.addEventListener('submit', searchLocations);
+    elements.importGpx.addEventListener('click', () => elements.gpxFile.click());
+    elements.gpxFile.addEventListener('change', importGpxFile);
     elements.clearRoute.addEventListener('click', clearRoute);
     elements.setNow.addEventListener('click', setFinishTimeToNow);
     elements.generate.addEventListener('click', generateGpx);
+    elements.activityName.addEventListener('input', () => {
+        state.activityNameTouched = true;
+        cancelGeneration();
+        updateActivityNameUi(false);
+        syncGenerateState();
+    });
+    elements.activityName.addEventListener('blur', () => {
+        const validation = activityNameValidation();
+        if (validation.valid) elements.activityName.value = validation.name;
+        updateActivityNameUi(true);
+        syncGenerateState();
+    });
     elements.pace.addEventListener('input', () => {
         cancelGeneration();
         state.paceByActivity[activityType()] = elements.pace.value;
@@ -76,6 +115,12 @@ function initialise() {
     });
     document.querySelectorAll('input[name="activity"]').forEach((input) => {
         input.addEventListener('change', handleActivityChange);
+    });
+    document.querySelectorAll('input[name="timing-mode"]').forEach((input) => {
+        input.addEventListener('change', () => {
+            cancelGeneration();
+            updateTimingModeUi();
+        });
     });
     document.addEventListener('click', (event) => {
         if (!elements.searchForm.contains(event.target)) elements.searchResults.hidden = true;
@@ -101,10 +146,45 @@ function activityType() {
     return document.querySelector('input[name="activity"]:checked').value;
 }
 
+function timingMode() {
+    return document.querySelector('input[name="timing-mode"]:checked').value;
+}
+
+function preservingImportedTiming() {
+    return Boolean(state.importedTrack) && timingMode() === 'preserve';
+}
+
+function defaultActivityName(type = activityType()) {
+    return `Generated ${type === 'bike' ? 'Bike' : 'Run'} Activity`;
+}
+
+function activityNameValidation() {
+    const name = elements.activityName.value.trim().replace(/\s+/g, ' ');
+    if (!name) return { valid: false, error: 'Enter an activity name.' };
+    if (name.length > 120) return { valid: false, error: 'Use no more than 120 characters.' };
+    return { valid: true, name };
+}
+
+function updateActivityNameUi(showError) {
+    const validation = activityNameValidation();
+    elements.activityName.setAttribute('aria-invalid', String(!validation.valid));
+    elements.activityNameError.hidden = validation.valid || !showError;
+    elements.activityNameError.textContent = validation.valid ? '' : validation.error;
+    return validation;
+}
+
 function handleActivityChange() {
+    cancelGeneration();
+    if (!state.importedTrack && !state.activityNameTouched) {
+        elements.activityName.value = defaultActivityName();
+    }
     elements.pace.value = state.paceByActivity[activityType()];
     updatePaceUi(false);
-    scheduleRouteUpdate();
+    if (state.importedTrack) {
+        syncGenerateState();
+    } else {
+        scheduleRouteUpdate();
+    }
 }
 
 function pointString() {
@@ -117,6 +197,10 @@ function pointString() {
 }
 
 function addPoint(latitude, longitude, name) {
+    if (state.importedTrack) {
+        showError('Clear the imported GPX before adding route points.');
+        return;
+    }
     if (state.markers.length >= MAX_POINTS) {
         showError(`A route can contain at most ${MAX_POINTS} points.`);
         return;
@@ -130,6 +214,116 @@ function addPoint(latitude, longitude, name) {
     state.markers.push({ marker, name });
     renderPointList();
     scheduleRouteUpdate();
+}
+
+function displaySegments(segments) {
+    const totalPoints = segments.reduce((total, segment) => total + segment.length, 0);
+    const stride = Math.max(1, Math.ceil(totalPoints / MAX_MAP_DISPLAY_POINTS));
+    return segments.map((segment) => segment.filter((_, index) => (
+        index === 0 || index === segment.length - 1 || index % stride === 0
+    )).map((point) => [point.latitude, point.longitude]));
+}
+
+function importedActivityType(imported) {
+    if (!imported.activityType) return;
+    const input = document.querySelector(`input[name="activity"][value="${imported.activityType}"]`);
+    if (input) input.checked = true;
+}
+
+function setImportedModeControls(enabled) {
+    elements.searchInput.disabled = enabled;
+    elements.searchForm.querySelector('button[type="submit"]').disabled = enabled;
+    elements.pointList.hidden = enabled;
+    elements.importSummary.hidden = !enabled;
+    elements.timingOptions.hidden = !enabled;
+    elements.searchResults.hidden = true;
+    elements.routeHeading.textContent = enabled ? 'Imported GPX' : 'Route points';
+    elements.mapHint.textContent = enabled
+        ? 'Imported locally · Clear the track to draw a new route'
+        : 'Click to add · Drag to adjust · Run and Bike follow matching paths';
+}
+
+function applyImportedTrack(imported) {
+    cancelGeneration();
+    window.clearTimeout(state.updateTimer);
+    state.updateTimer = null;
+    state.routeRequestId += 1;
+    if (state.routeController) state.routeController.abort();
+    state.routeController = null;
+    state.markers.forEach(({ marker }) => state.map.removeLayer(marker));
+    state.markers = [];
+    removeRouteLayer();
+
+    state.importedTrack = imported;
+    state.routeReady = true;
+    state.routePoints = [];
+    state.routeDistanceMeters = imported.distanceMeters;
+    state.activityNameTouched = true;
+    importedActivityType(imported);
+    elements.activityName.value = imported.activityName;
+    elements.pace.value = state.paceByActivity[activityType()];
+
+    const timingInput = document.querySelector(
+        `input[name="timing-mode"][value="${imported.preserveAvailable ? 'preserve' : 'retime'}"]`
+    );
+    timingInput.checked = true;
+    elements.preserveOption.disabled = !imported.preserveAvailable;
+    elements.preserveError.hidden = imported.preserveAvailable;
+    elements.preserveError.textContent = imported.preserveAvailable
+        ? ''
+        : 'Preserve is unavailable because some timestamps are missing or not strictly increasing.';
+
+    state.routeLayer = L.polyline(displaySegments(imported.segments), {
+        color: '#fc4c02', weight: 5, opacity: .92, lineJoin: 'round',
+    }).addTo(state.map);
+    state.map.fitBounds(state.routeLayer.getBounds(), { padding: [45, 45], maxZoom: 16 });
+
+    elements.pointCount.textContent = `${imported.points.length.toLocaleString()} pts`;
+    elements.importFileName.textContent = imported.filename;
+    const sensorSummary = imported.extensionPointCount
+        ? ` · sensor extensions ${imported.extensionPointCount.toLocaleString()}`
+        : '';
+    elements.importDetails.textContent = `${(imported.distanceMeters / 1000).toFixed(2)} km`
+        + ` · ${imported.points.length.toLocaleString()} points`
+        + ` · elevation ${imported.elevationPointCount.toLocaleString()}/${imported.points.length.toLocaleString()}`
+        + sensorSummary;
+    setImportedModeControls(true);
+    setRouteStatus(`${(imported.distanceMeters / 1000).toFixed(2)} km · imported locally`, 'is-ready');
+    renderPointList();
+    updateActivityNameUi(false);
+    updateTimingModeUi();
+}
+
+async function importGpxFile(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const requestId = state.importRequestId + 1;
+    state.importRequestId = requestId;
+    if (file.size > window.GpxImport.MAX_FILE_BYTES) {
+        showError('Choose a GPX file no larger than 25 MB.');
+        elements.gpxFile.value = '';
+        return;
+    }
+
+    const previousImport = state.importedTrack;
+    setRouteStatus('Reading GPX locally…', 'is-loading');
+    try {
+        const text = await file.text();
+        if (requestId !== state.importRequestId) return;
+        applyImportedTrack(window.GpxImport.parse(text, file.name));
+    } catch (error) {
+        if (requestId !== state.importRequestId) return;
+        if (previousImport && state.importedTrack === previousImport) {
+            setRouteStatus(
+                `${(previousImport.distanceMeters / 1000).toFixed(2)} km · imported locally`,
+                'is-ready',
+            );
+        } else {
+            setRouteStatus('GPX import failed', 'is-error');
+        }
+        showError(error.message || 'The GPX file could not be imported.');
+        elements.gpxFile.value = '';
+    }
 }
 
 function removePoint(index) {
@@ -159,6 +353,11 @@ function pointActionButton(action, label, text, disabled, onClick) {
 }
 
 function renderPointList() {
+    if (state.importedTrack) {
+        elements.pointCount.textContent = `${state.importedTrack.points.length.toLocaleString()} pts`;
+        elements.pointList.replaceChildren();
+        return;
+    }
     elements.pointCount.textContent = `${state.markers.length} / ${MAX_POINTS}`;
     elements.pointList.replaceChildren();
 
@@ -325,6 +524,10 @@ async function searchLocations(event) {
 }
 
 function renderSearchResults(results) {
+    if (state.importedTrack) {
+        elements.searchResults.hidden = true;
+        return;
+    }
     elements.searchResults.replaceChildren();
     if (!results.length) {
         const empty = document.createElement('div');
@@ -350,7 +553,9 @@ function renderSearchResults(results) {
 }
 
 function clearRoute() {
+    const wasImported = Boolean(state.importedTrack);
     cancelGeneration();
+    state.importRequestId += 1;
     window.clearTimeout(state.updateTimer);
     state.updateTimer = null;
     state.routeRequestId += 1;
@@ -359,9 +564,19 @@ function clearRoute() {
     state.markers.forEach(({ marker }) => state.map.removeLayer(marker));
     state.markers = [];
     removeRouteLayer();
+    state.importedTrack = null;
     state.routeReady = false;
     state.routePoints = [];
     state.routeDistanceMeters = 0;
+    elements.gpxFile.value = '';
+    elements.preserveOption.disabled = false;
+    elements.preserveError.hidden = true;
+    setImportedModeControls(false);
+    if (wasImported) {
+        state.activityNameTouched = false;
+        elements.activityName.value = defaultActivityName();
+    }
+    setGenerateButtonLabel(false);
     renderPointList();
     setRouteStatus('Add two points to begin', 'is-empty');
     updatePaceUi(false);
@@ -422,7 +637,27 @@ function finishValidation() {
     return { valid: true, date: selectedFinish };
 }
 
+function updateTimingModeUi() {
+    const preserve = preservingImportedTiming();
+    elements.paceField.hidden = preserve;
+    elements.finishControl.hidden = preserve;
+    if (preserve) elements.finishError.hidden = true;
+    elements.finishStepLabel.textContent = preserve ? '03 · ORIGINAL TIMING' : '03 · FINISH TIME';
+    elements.durationLabel.textContent = preserve ? 'Elapsed duration' : 'Estimated duration';
+    elements.startLabel.textContent = preserve ? 'Original start' : 'Calculated start';
+    setGenerateButtonLabel(false);
+    updatePaceUi(false);
+}
+
 function updatePaceUi(showPaceError, showFinishError = false) {
+    if (preservingImportedTiming()) {
+        const imported = state.importedTrack;
+        elements.estimatedDuration.textContent = formatDuration(imported.durationSeconds);
+        elements.calculatedStart.textContent = formatDateTime(imported.startTime);
+        syncGenerateState();
+        return;
+    }
+
     const parsed = parsePaceInput(elements.pace.value, activityType());
     elements.pace.setAttribute('aria-invalid', String(!parsed.valid));
     elements.paceError.hidden = parsed.valid || !showPaceError;
@@ -449,14 +684,20 @@ function updatePaceUi(showPaceError, showFinishError = false) {
 }
 
 function syncGenerateState() {
-    const paceValid = parsePaceInput(elements.pace.value, activityType()).valid;
-    const finishValid = finishValidation().valid;
-    elements.generate.disabled = !state.routeReady || !paceValid || !finishValid || state.generating;
+    const nameValid = activityNameValidation().valid;
+    const preserveValid = preservingImportedTiming() && state.importedTrack.preserveAvailable;
+    const retimeValid = !preservingImportedTiming()
+        && parsePaceInput(elements.pace.value, activityType()).valid
+        && finishValidation().valid;
+    elements.generate.disabled = !state.routeReady
+        || !nameValid
+        || (!preserveValid && !retimeValid)
+        || state.generating;
 }
 
 function setGenerateButtonLabel(generating) {
     const label = document.createElement('span');
-    label.textContent = generating ? 'Generating…' : 'Generate GPX';
+    label.textContent = generating ? 'Preparing…' : (state.importedTrack ? 'Export GPX' : 'Generate GPX');
     const icon = document.createElement('span');
     icon.setAttribute('aria-hidden', 'true');
     icon.textContent = generating ? '•••' : '↓';
@@ -475,17 +716,31 @@ function cancelGeneration() {
 
 async function generateGpx() {
     if (!state.routeReady || state.generating) return;
-    const parsedPace = parsePaceInput(elements.pace.value, activityType());
-    if (!parsedPace.valid) {
-        updatePaceUi(true);
-        elements.pace.focus();
+    const nameValidation = updateActivityNameUi(true);
+    if (!nameValidation.valid) {
+        elements.activityName.focus();
         return;
     }
 
-    const finish = finishValidation();
-    if (!finish.valid) {
-        updatePaceUi(false, true);
-        elements.finishTime.focus();
+    const preserve = preservingImportedTiming();
+    let parsedPace = null;
+    let finish = null;
+    if (!preserve) {
+        parsedPace = parsePaceInput(elements.pace.value, activityType());
+        if (!parsedPace.valid) {
+            updatePaceUi(true);
+            elements.pace.focus();
+            return;
+        }
+
+        finish = finishValidation();
+        if (!finish.valid) {
+            updatePaceUi(false, true);
+            elements.finishTime.focus();
+            return;
+        }
+    } else if (!state.importedTrack.preserveAvailable) {
+        showError('The imported GPX does not have complete, increasing timestamps.');
         return;
     }
 
@@ -498,6 +753,26 @@ async function generateGpx() {
     setGenerateButtonLabel(true);
 
     try {
+        if (state.importedTrack) {
+            const mode = preserve ? 'preserved' : 'retimed';
+            const result = preserve
+                ? { gpx: window.GpxImport.serializePreserved(
+                    state.importedTrack,
+                    nameValidation.name,
+                    activityType(),
+                ) }
+                : window.GpxImport.serializeRetimed(
+                    state.importedTrack,
+                    nameValidation.name,
+                    activityType(),
+                    finish.date,
+                    parsedPace.seconds,
+                );
+            if (requestId !== state.generationRequestId) return;
+            downloadText(result.gpx, activityFilename(nameValidation.name, mode));
+            return;
+        }
+
         const response = await fetch('/api/v1/generate-strava-gpx', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -505,6 +780,7 @@ async function generateGpx() {
                 route_points: state.routePoints,
                 route_distance: state.routeDistanceMeters,
                 activity_type: activityType(),
+                activity_name: nameValidation.name,
                 end_time: finish.date.toISOString(),
                 pace: parsedPace.normalized,
             }),
@@ -513,7 +789,7 @@ async function generateGpx() {
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error || 'GPX generation failed');
         if (requestId !== state.generationRequestId) return;
-        downloadText(payload.gpx, `strava_${fileTimestamp(new Date())}.gpx`);
+        downloadText(payload.gpx, activityFilename(nameValidation.name, 'generated'));
     } catch (error) {
         if (error.name === 'AbortError') return;
         if (requestId !== state.generationRequestId) return;
@@ -561,6 +837,14 @@ function downloadText(text, filename) {
 
 function fileTimestamp(date) {
     return date.toISOString().replace(/[-:]/g, '').replace(/\..+/, '').replace('T', '_');
+}
+
+function activityFilename(name, mode) {
+    const safeName = name.normalize('NFKC')
+        .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_')
+        .trim()
+        .slice(0, 80) || 'strava_activity';
+    return `${safeName}_${mode}_${fileTimestamp(new Date())}.gpx`;
 }
 
 window.addEventListener('DOMContentLoaded', initialise);

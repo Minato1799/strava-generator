@@ -6,9 +6,16 @@ This file is the durable handoff for Claude or another coding agent. Read it bef
 
 ## Current objective
 
-Keep the Strava Generator small, stateless, privacy-conscious, and easy to operate while modernizing the parts users actually feel. The next implementation work should focus on mobile route building, accessibility, a three-way effort calculator, browser regression coverage, and provider/production resilience.
+Keep the Strava Generator small, stateless, privacy-conscious, and easy to operate while modernizing the parts users actually feel. The current working branch implements local GPX import, editable activity identity, and Preserve/Re-time export modes. The next work after this feature is released should focus on mobile route building, accessibility, a three-way effort calculator, and permanent browser regression coverage.
 
-The current request authorizes sequential implementation plus exact-path staging, commit, and push. It does not authorize PR creation, merge, production deployment/promotion, firewall publication, destructive history work, or unrelated GitHub/Vercel changes.
+The latest request authorizes local implementation and verification. It does not by itself authorize push, PR creation, merge, production deployment/promotion, destructive history work, or unrelated GitHub/Vercel changes.
+
+Current local handoff state:
+
+- Branch: `agent/gpx-import-preserve-retime`, based on `main` at `3ba9b93`.
+- The user subsequently authorized commit, push, and deployment. Verify the current branch, commit, PR, and deployment state rather than assuming release completed.
+- The real user-supplied GPX was used only for local browser verification and was not copied into the repository.
+- Last local verification: Ruff and Django checks passed, 51 tests passed with 85% branch coverage, deploy check passed, dependency audit found no known vulnerabilities, both JavaScript files passed syntax checks, and Chrome verified Preserve/Re-time exports at desktop and 320 px with no console/page errors.
 
 ## Product and architecture
 
@@ -16,7 +23,8 @@ The current request authorizes sequential implementation plus exact-path staging
 - Production URL: `https://strava-generator-opal.vercel.app`
 - Stack: Django 5.2 LTS, Python 3.12, native JavaScript, Leaflet 1.9.4, OpenStreetMap tiles, Nominatim-compatible search, and OSRM-compatible foot/bike routing.
 - The application is intentionally stateless. It has no user accounts, database, stored route history, or required Google Maps key.
-- The browser builds a route and sends JSON POST requests. The server validates inputs/provider output and generates the authoritative GPX timestamps.
+- The browser builds a manual route and sends JSON POST requests. The server validates inputs/provider output and generates authoritative timestamps for manually drawn routes.
+- Imported GPX files are parsed locally in the browser. Preserve changes only activity identity and retains original timestamps/elevation/extensions. Re-time retains geometry/elevation, removes track-point sensor extensions, and creates new timestamps locally; imported GPX content is not sent to the application API.
 - Warm processes have short-lived bounded caches, request coalescing, and per-process provider pacing. This is not a global rate limit across Vercel instances.
 - `requirements*.in` record dependency intent; the hash-locked `requirements*.txt` files are the reviewed install inputs. Do not commit Vercel-generated `pyproject.toml` or `uv.lock` files.
 - Preserve GPL-3.0 and upstream attribution. Read `UPSTREAM.md` before provenance-related changes.
@@ -25,16 +33,16 @@ The current request authorizes sequential implementation plus exact-path staging
 
 These facts are a handoff snapshot, not permanent truth. Verify them before release work.
 
-- `main` and production source SHA: `a5a30a94e5bf66e368cd938ce92ecf7031490c9a`
-- Production deployment: `dpl_6jRJ48Tk9UpVpccN8UFtswvVxiav`
-- Runtime region: `sin1`; Python 3.12 function artifact was about 18.13 MiB.
+- `main`, VPS application release, and production source SHA: `3ba9b93ae7b7e8c99806f1aa8318c78021e76979`
+- Primary production URL: `https://strava.scan-realtime.site`; Vercel remains the fallback at `https://strava-generator-opal.vercel.app`.
+- Latest verified Vercel fallback deployment: `dpl_35neWR4VwVbFCYfavEtXJiVhLEWt`; runtime region `sin1`, Python 3.12, about 18.15 MiB.
 - Known rollback deployment: `dpl_EFkvfZWQGzPj6czsBQK3rLmRq2zV`
 - `main` requires a pull request and the `test`, `Analyze (python)`, `Analyze (javascript-typescript)`, `CodeQL`, and `Vercel` checks. Admin enforcement and conversation resolution were enabled; force-push and deletion were disabled.
 - No pull requests were open at the time of this snapshot.
 - Production and generic Preview each have a distinct encrypted `DJANGO_SECRET_KEY`. Never print, copy, or reuse either value. A stale branch-specific Preview override still exists for `agent/park-routing-manual-pace`.
 - The Vercel project default function timeout is 30 seconds for new deployments. Verify the effective timeout on each Preview/Production artifact because the current production deployment predates this setting.
 - Production has an exact `ALLOWED_HOSTS` environment entry for `strava-generator-opal.vercel.app`; generated deployment, branch, and project-production hosts come from Vercel system variables.
-- Three unpublished Vercel firewall rules exist in log-only/draft form for route, search, and GPX bursts. Publishing them is a user decision; normal traffic must be measured first.
+- Cloudflare proxies the primary production hostname with Full (strict) TLS. One active rate-limit rule covers the three POST APIs at 10 requests per 10 seconds per IP. This is abuse protection, not aggregate Nominatim quota enforcement.
 - GitHub secret scanning has three open historic Google API key findings inherited from upstream history. The current application does not use them. Do not display or test the values, do not claim revocation, and do not rewrite history without original-key-owner confirmation plus explicit user approval.
 
 ## Preserve these invariants
@@ -47,7 +55,7 @@ These facts are a handoff snapshot, not permanent truth. Verify them before rele
 5. Do not implement Nominatim autocomplete. Do not bulk-download, prefetch, or offer offline use through the public OpenStreetMap tile service.
 6. Do not add automatic retries against public routing/geocoding providers. Cache, coalesce, pace, fail clearly, and use a managed or self-hosted provider before meaningful scale.
 7. Preserve CSP, SRI, security headers, privacy copy, run/bike routing profiles, request cancellation, and stale-response protection.
-8. Do not move GPX generation or trust decisions to client-only code.
+8. Keep server validation authoritative for manually drawn routes. Imported-file Preserve/Re-time is intentionally local-only; do not send imported GPX content or sensor data to the application API.
 9. Do not add features intended to fabricate real-world activity. Keep the product framed as legitimate personal route simulation and testing.
 
 ## Prioritized modernization backlog
@@ -133,6 +141,7 @@ VERCEL=1 DJANGO_SECRET_KEY='audit-only-secret-not-for-any-deployment-0123456789a
 CONTEXT=DEBUG .venv/bin/coverage run --branch --source=mylibs,strava,strava_generator manage.py test tests
 .venv/bin/coverage report --skip-covered --fail-under=80
 node --check strava_generator/static/strava_generator/js/index.js
+node --check strava_generator/static/strava_generator/js/gpx-import.js
 .venv/bin/pip-audit --require-hashes -r requirements.txt
 git diff --check
 ```

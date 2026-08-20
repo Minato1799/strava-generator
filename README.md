@@ -18,6 +18,9 @@ A stateless Django route builder that creates timestamped GPX files for running 
 - Separate foot and bike routing profiles powered by OSRM, including mapped park paths
 - Reorderable and draggable route points
 - Manual `MM:SS` pace (or number-pad digits such as `530`) with live speed, duration, and calculated start time
+- Custom Unicode activity names and GPX track types for running and cycling
+- Local GPX import with Preserve and Re-time export modes
+- Preserve keeps original timestamps, elevation, and sensor extensions; Re-time keeps the track and elevation while removing stale sensor extensions
 - Custom finish time and deterministic GPX 1.1 timestamps
 - Stateless deployment: no account, database, or Google Maps API key required
 - Vercel-ready Django deployment with source-controlled runtime settings
@@ -26,13 +29,16 @@ A stateless Django route builder that creates timestamped GPX files for running 
 
 ```text
 Browser (Leaflet UI)
+  ├─ Local GPX import/export        → never sent to the application API
+  │    ├─ Preserve                 → original time, elevation, sensors
+  │    └─ Re-time                  → new pace/time, sensors removed
   ├─ POST /api/v1/search-location  → Nominatim
   ├─ POST /api/v1/route            → OSRM foot or bike profile
   └─ POST /api/v1/generate-strava-gpx
        └─ Django + Python GPX generator
 ```
 
-The app intentionally does not persist users, routes, or generated files. Route points and search text are sent in JSON request bodies rather than query strings, and API responses are marked `private, no-store`. Warm application instances keep only a short-lived, bounded cache to coalesce identical provider requests and pace calls within that process. The browser reuses the route geometry it has already fetched when generating a GPX, avoiding a duplicate routing request.
+The app intentionally does not persist users, routes, or generated files. Imported GPX content is parsed and exported in the browser without being sent to the application API; displaying it on the map still requests surrounding OpenStreetMap tiles. Manually drawn route points and search text are sent in JSON request bodies rather than query strings, and API responses are marked `private, no-store`. Warm application instances keep only a short-lived, bounded cache to coalesce identical provider requests and pace calls within that process. The browser reuses the route geometry it has already fetched when generating a GPX, avoiding a duplicate routing request.
 
 Public OpenStreetMap services are suitable for normal, low-volume use but do not provide a production SLA; follow both the [routing service usage policy](https://routing.openstreetmap.de/about.html) and [Nominatim usage policy](https://operations.osmfoundation.org/policies/nominatim/). Per-process pacing is not a global rate limit across Vercel instances, so move to a managed or self-hosted provider before scaling traffic. Infrastructure and upstream providers can still retain ordinary request metadata under their own policies.
 
@@ -57,6 +63,7 @@ CONTEXT=DEBUG .venv/bin/coverage run --branch --source=mylibs,strava,strava_gene
 .venv/bin/coverage report --skip-covered --fail-under=80
 .venv/bin/pip-audit --require-hashes -r requirements.txt
 node --check strava_generator/static/strava_generator/js/index.js
+node --check strava_generator/static/strava_generator/js/gpx-import.js
 ```
 
 ## Deploy to Vercel
