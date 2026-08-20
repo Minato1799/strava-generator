@@ -6,21 +6,22 @@ This file is the durable handoff for Claude or another coding agent. Read it bef
 
 ## Current objective
 
-Keep the Strava Generator small, stateless, privacy-conscious, and easy to operate while modernizing the parts users actually feel. The current working branch implements local GPX import, editable activity identity, and Preserve/Re-time export modes. The next work after this feature is released should focus on mobile route building, accessibility, a three-way effort calculator, and permanent browser regression coverage.
+Keep the Strava Generator small, stateless, privacy-conscious, and easy to operate while modernizing the parts users actually feel. Local GPX import, editable activity identity, and Preserve/Re-time export modes are released. The next implementation should focus on mobile route building, accessibility, a three-way effort calculator, and permanent browser regression coverage.
 
-The latest request authorizes local implementation and verification. It does not by itself authorize push, PR creation, merge, production deployment/promotion, destructive history work, or unrelated GitHub/Vercel changes.
+The latest request authorizes committing and pushing this handoff update on a feature branch. It does not authorize PR creation, merge, deployment, destructive history work, or unrelated GitHub/Vercel/Cloudflare/VPS changes.
 
 Current local handoff state:
 
-- Branch: `agent/gpx-import-preserve-retime`, based on `main` at `3ba9b93`.
-- The user subsequently authorized commit, push, and deployment. Verify the current branch, commit, PR, and deployment state rather than assuming release completed.
+- Branch: `agent/update-claude-handoff`, based on `main` at `443539fdbb88d65cb4d55c9a1c480bf2c3dcabf5`. It contains only the requested `CLAUDE.md` handoff update; verify its current commit/push state before continuing.
+- Feature PR #6 and cache-busting hotfix PR #7 are merged. No pull requests were open at the time of this snapshot.
 - The real user-supplied GPX was used only for local browser verification and was not copied into the repository.
-- Last local verification: Ruff and Django checks passed, 51 tests passed with 85% branch coverage, deploy check passed, dependency audit found no known vulnerabilities, both JavaScript files passed syntax checks, and Chrome verified Preserve/Re-time exports at desktop and 320 px with no console/page errors.
+- The real file contains 2,200 track points. Production Chrome verification passed on both the VPS primary and Vercel fallback: Preserve retained all timestamps, elevations, and sensor extensions; Re-time retained geometry/elevation, changed the activity identity/type, regenerated strictly increasing timestamps from pace 5:30, removed sensor extensions, and made no request to the application's GPX-generation API.
+- Release verification: Ruff and Django checks passed, 51 tests passed with at least 85% branch coverage in the feature release, deploy check passed, dependency audit found no known vulnerabilities, both JavaScript files passed syntax checks, GitHub Tests/CodeQL/Vercel checks passed, and public root/health endpoints returned 200.
 
 ## Product and architecture
 
 - Public repository: `Minato1799/strava-generator`
-- Production URL: `https://strava-generator-opal.vercel.app`
+- Primary production URL: `https://strava.scan-realtime.site`; Vercel fallback: `https://strava-generator-opal.vercel.app`.
 - Stack: Django 5.2 LTS, Python 3.12, native JavaScript, Leaflet 1.9.4, OpenStreetMap tiles, Nominatim-compatible search, and OSRM-compatible foot/bike routing.
 - The application is intentionally stateless. It has no user accounts, database, stored route history, or required Google Maps key.
 - The browser builds a manual route and sends JSON POST requests. The server validates inputs/provider output and generates authoritative timestamps for manually drawn routes.
@@ -33,14 +34,18 @@ Current local handoff state:
 
 These facts are a handoff snapshot, not permanent truth. Verify them before release work.
 
-- `main`, VPS application release, and production source SHA: `3ba9b93ae7b7e8c99806f1aa8318c78021e76979`
+- `main`, VPS application release, and production source SHA: `443539fdbb88d65cb4d55c9a1c480bf2c3dcabf5`
 - Primary production URL: `https://strava.scan-realtime.site`; Vercel remains the fallback at `https://strava-generator-opal.vercel.app`.
-- Latest verified Vercel fallback deployment: `dpl_35neWR4VwVbFCYfavEtXJiVhLEWt`; runtime region `sin1`, Python 3.12, about 18.15 MiB.
-- Known rollback deployment: `dpl_EFkvfZWQGzPj6czsBQK3rLmRq2zV`
+- Latest verified Vercel fallback deployment: `dpl_2mswpDYHwk8xELo25xL6q2HvKQqZ`; runtime region `sin1`, Python 3.12, about 18.16 MiB.
+- Vercel rollback targets: `dpl_6hPyjvUwdVsQVq1CXU92PSXc7dub` is the GPX feature before cache-busting; `dpl_35neWR4VwVbFCYfavEtXJiVhLEWt` is the pre-feature production.
+- VPS `current` points to `/opt/strava-generator/releases/443539fdbb88d65cb4d55c9a1c480bf2c3dcabf5`. Immediate rollback is release `9f2b90e9e179dd586c29a7ca5f2736f2b4f2b4a9`; pre-feature rollback is `3ba9b93ae7b7e8c99806f1aa8318c78021e76979`.
+- VPS services `strava-generator`, `caddy`, `strava-osrm-foot`, and `strava-osrm-bike` were active after release. No VPS error-priority entries and no Vercel error/500 records were found in the post-release verification window.
+- Static application assets use the query version `v=20260820-gpx1`. This was added because Cloudflare served a previous unversioned `index.js`/`index.css` for up to four hours after the first GPX rollout. Do not remove versioning without replacing it with content-hashed assets or an equivalent cache-safe strategy.
+- Cloudflare Browser Insights attempts to inject its beacon, which the current CSP intentionally blocks. It does not affect application behavior. Prefer disabling that Cloudflare feature if a clean console is required; do not weaken `script-src` merely to allow an unpinned injected script.
 - `main` requires a pull request and the `test`, `Analyze (python)`, `Analyze (javascript-typescript)`, `CodeQL`, and `Vercel` checks. Admin enforcement and conversation resolution were enabled; force-push and deletion were disabled.
 - No pull requests were open at the time of this snapshot.
 - Production and generic Preview each have a distinct encrypted `DJANGO_SECRET_KEY`. Never print, copy, or reuse either value. A stale branch-specific Preview override still exists for `agent/park-routing-manual-pace`.
-- The Vercel project default function timeout is 30 seconds for new deployments. Verify the effective timeout on each Preview/Production artifact because the current production deployment predates this setting.
+- The Vercel project default function timeout is 30 seconds. Verify the effective timeout on each Preview/Production artifact rather than assuming project defaults were applied.
 - Production has an exact `ALLOWED_HOSTS` environment entry for `strava-generator-opal.vercel.app`; generated deployment, branch, and project-production hosts come from Vercel system variables.
 - Cloudflare proxies the primary production hostname with Full (strict) TLS. One active rate-limit rule covers the three POST APIs at 10 requests per 10 seconds per IP. This is abuse protection, not aggregate Nominatim quota enforcement.
 - GitHub secret scanning has three open historic Google API key findings inherited from upstream history. The current application does not use them. Do not display or test the values, do not claim revocation, and do not rewrite history without original-key-owner confirmation plus explicit user approval.
@@ -148,18 +153,19 @@ git diff --check
 
 If JavaScript is split into modules, update the syntax/unit-test commands and CI in the same PR. Tests must not depend on live public providers.
 
-## Safe GitHub and Vercel workflow
+## Safe GitHub, Vercel, and VPS workflow
 
 1. Read `README.md`, `ROADMAP.md`, `SECURITY.md`, `UPSTREAM.md`, and this file.
 2. Run `git status --short --branch` and `git rev-parse HEAD`. Preserve unrelated user changes.
 3. Refresh GitHub state: current branch, open PRs, protection/check names, Dependabot/CodeQL/secret alerts.
-4. Refresh Vercel state: project link, environment-variable scopes without revealing values, current production SHA/deployment/region, protection, firewall state, and rollback target.
+4. Refresh Vercel and VPS state: project link, environment-variable scopes without revealing values, current production SHA/deployment/region, VPS `current` symlink/source SHA, service health, Cloudflare behavior, and rollback targets.
 5. Work on a new feature branch and one coherent PR. Never bypass protected `main`.
 6. Use a distinct encrypted Preview `DJANGO_SECRET_KEY`; do not expose or copy Production secrets.
 7. Wait for all required GitHub checks and a protected Preview deployment of the exact commit.
 8. Verify Preview root, health, static assets, headers, invalid JSON, calculator/GPX, and browser behavior. If a live provider smoke is necessary, make only a minimal number of spaced requests and record that it is not an SLA test.
-9. Before any production change, record the currently healthy deployment as the rollback target.
-10. After an authorized merge/deploy, verify the deployed source SHA, health, security headers, one policy-safe foot route, one bike route, generated GPX XML/final time, logs, and 5xx status. Roll back immediately on regression.
+9. Before any production change, record both the healthy Vercel deployment ID and VPS release symlink as rollback targets.
+10. For VPS release work, create a detached Git worktree at `/opt/strava-generator/releases/<full-sha>`, install only hash-locked requirements, run `check --deploy`, collect static files, and run the test suite in an isolated test environment. Do not source `/etc/strava-generator.env` into the test suite: production HTTPS/local-OSRM settings cause expected test responses and provider mocks to differ. Promote through a temporary symlink and atomic rename, restart only `strava-generator`, and roll back the symlink immediately if the local health check fails. Do not restart OSRM for application-only changes.
+11. After an authorized merge/deploy, verify the deployed source SHA, versioned static asset hashes, public root/health, security headers, browser Preserve/Re-time with a safe GPX fixture, one policy-safe foot route and bike route only when routing changed, logs, and 5xx status. Roll back immediately on regression.
 
 ## Definition of done
 
@@ -168,11 +174,11 @@ A task is not complete merely because local code builds. Record:
 - branch and exact commit SHA;
 - files and behavior changed;
 - local tests and coverage;
-- Preview deployment ID/URL and its exact source SHA;
+- Preview and Production deployment IDs/URLs and their exact source SHA;
 - required GitHub check results;
 - runtime/mobile/accessibility evidence appropriate to the change;
 - external settings or state changed;
-- Production verification and rollback target, if Production changed;
+- Production verification and both Vercel/VPS rollback targets, if Production changed;
 - remaining risks and any user-only action.
 
 ## Token/context handoff protocol
